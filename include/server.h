@@ -1,6 +1,6 @@
 #ifndef SERVER_H
 #define SERVER_H
 
-int server_run(int port);
+int server_run(const char* port);
 
 #endif

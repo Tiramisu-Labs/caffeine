@@ -10,6 +10,7 @@
 #include <poll.h>
 
 #include "../include/server.h"
+#include "../include/caffeine.h"
 
 const char *inet_ntop2(void *addr, char *buf, size_t size)
 {
@@ -34,7 +35,7 @@ const char *inet_ntop2(void *addr, char *buf, size_t size)
     return inet_ntop(sas->ss_family, src, buf, size);
 }
 
-int get_listener_socket(int port)
+int get_listener_socket(const char* port)
 {
     int listener;
     int yes = 1;
@@ -118,47 +119,23 @@ void handle_new_connection(int listener, int *fd_count, int *fd_size, struct pol
     }
 }
 
-void handle_client_data(int listener, int *fd_count, struct pollfd *pfds, int *pfd_i)
+void process_connections(int listener, int *fd_count, int *fd_size, struct pollfd **pfds)
 {
-    char buf[256];
-
-    int nbytes = recv(pfds[*pfd_i].fd, buf, sizeof buf, 0);
-    int sender_fd = pfds[*pfd_i].fd;
-
-    if (nbytes <= 0) {
-        if (nbytes == 0) printf("pollserver: socket %d hung up\n", sender_fd);
-        else perror("recv");
-
-        close(pfds[*pfd_i].fd);
-
-        del_from_pfds(pfds, *pfd_i, fd_count);
-
-        (*pfd_i)--;
-    } else {
-        printf("pollserver: recv from fd %d: %.*s", sender_fd, nbytes, buf);
-        for(int j = 0; j < *fd_count; j++) {
-            int dest_fd = pfds[j].fd;
-
-            if (dest_fd != listener && dest_fd != sender_fd) {
-                if (send(dest_fd, buf, nbytes, 0) == -1) {
-                    perror("send");
+    for(int i = 0; i < *fd_count; i++) {
+        if ((*pfds)[i].revents & (POLLIN | POLLHUP)) {
+            if ((*pfds)[i].fd == listener) handle_new_connection(listener, fd_count, fd_size, pfds);
+            else {
+                if (handle_client_data((*pfds)[i].fd) == RDEND) {
+                    close((*pfds)[i].fd);
+                    del_from_pfds(pfds, i, fd_count);
+                    (i)--;
                 }
             }
         }
     }
 }
 
-void process_connections(int listener, int *fd_count, int *fd_size, struct pollfd **pfds)
-{
-    for(int i = 0; i < *fd_count; i++) {
-        if ((*pfds)[i].revents & (POLLIN | POLLHUP)) {
-            if ((*pfds)[i].fd == listener) handle_new_connection(listener, fd_count, fd_size, pfds);
-            else handle_client_data(listener, fd_count, *pfds, &i);
-        }
-    }
-}
-
-int server_run(int port)
+int server_run(const char* port)
 {
     int listener;
 
