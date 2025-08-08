@@ -1,5 +1,5 @@
 NAME=caffeine
-SRC=main.c caffeine.c server.c
+SRC=caffeine.c worker.c
 SRCDIR=src
 SRCS=$(addprefix $(SRCDIR)/, $(SRC))
 CC=gcc
