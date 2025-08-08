@@ -1,7 +1,7 @@
-The execve Web Server 🚀
+# Caffeine!
 This is a high-performance web server designed to handle HTTP requests and execute a specified binary file in a secure and efficient manner. The architecture is built to be lightweight and scalable, leveraging Unix-like operating system features to manage concurrency without relying on complex, multi-threaded frameworks.
 
-⚙️ Architecture Overview
+## Architecture Overview
 The server follows a producer-consumer model with a process pool, a highly efficient and robust design for this type of task. It consists of two main components:
 
 The Parent Process (Producer): This is the server's main listener. Its sole job is to accept new client connections on a standard TCP port (e.g., 8080). When a connection arrives, it gets the client's file descriptor and sends it to a worker process. The parent's code is minimal and non-blocking, ensuring it can handle many concurrent connections without getting bogged down by reading data or executing binaries.
@@ -10,7 +10,7 @@ The Worker Processes (Consumers): A pool of pre-forked worker processes, managed
 
 This architecture is secure because the potentially dangerous execve call is isolated within a disposable "grandchild" process. A crash in the executed binary will not affect the parent or other workers.
 
-🤝 How It Works: The Communication Flow
+## How It Works: The Communication Flow
 The key to this design is the use of Unix Domain Sockets for Inter-Process Communication (IPC).
 
 Centralized Task Queue: The parent process creates and binds to a single Unix Domain Socket file on the filesystem (/tmp/webserver.sock). All worker processes connect to this same socket, forming a shared queue.
@@ -21,42 +21,49 @@ Kernel-level Load Balancing: All workers are in a blocking recvmsg() call, waiti
 
 Direct Communication: Once a worker receives the file descriptor, it now has a direct connection to the client. It handles the entire request-response cycle from that point on, keeping the parent process free to accept new connections.
 
-📦 Getting Started
-Prerequisites
-You'll need a C compiler (like gcc) and a Unix-like operating system (Linux, macOS, etc.).
+## Getting Started
+### Prerequisites
+You'll need a C compiler (like gcc or clang) and a Unix-like operating system (Linux, macOS, etc.).
 
-Build the Server
-Clone this repository (or save the provided code files).
+### Build and Run
+- Clone this repository (or save the provided code files)
+- make build.sh executable
+```
+chmod +x build.sh
+```
+- launch the script and follow the instructions
+```
+./build.sh
+...
+cd build
+make install
+```
+By deault, the script will install the binary in $HOME/.local. If you want to specify a different path, simply pass it to the script:
+```
+./build.sh /usr/local
+```
+- now you can run the server using
+```
+./caffeine
+```
+By default the server listen on port 8080 and spawn 4 workers. Use --workers and -- port to modify this values
 
-Compile the single source file into a single executable:
 
-Bash
-
-gcc server.c -o server
-Run the Server
-Start the parent process. It will automatically fork the worker pool and begin listening.
-
-Bash
-
-./server
-The server is now running and listening on port 8080.
-
-💻 Usage
+## 💻 Usage
 You can test the server using curl or a web browser.
 
-Simple Request
+### Simple Request
 This will be handled directly by one of the worker processes, which will return a simple "Hello, world!" response.
 
-Bash
-
 curl http://localhost:8080
+
 Executing a Binary
 This will instruct a worker to execute a binary (/bin/ls -l / in the example) and send its output back to the client.
 
 Bash
 
 curl http://localhost:8080/run-binary
-📝 Code Structure
+### 📝 Code Structure
 common.h: Defines shared constants and utility functions for passing file descriptors.
 
 server.c: The single source file containing all the logic for both the parent (listener) and worker processes.

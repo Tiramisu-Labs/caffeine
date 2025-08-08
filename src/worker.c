@@ -33,10 +33,11 @@ void exec_worker(void) {
             printf("Worker (PID %d) received HTTP request on FD %d:\n%s\n", getpid(), client_fd, buffer);
             
             if (strstr(buffer, "GET /run-binary")) {
+                printf("inside strstr\n");
                 pid_t grandchild_pid = fork();
                 if (grandchild_pid == 0) {
                     dup2(client_fd, STDOUT_FILENO);
-                    execlp("ls", "ls", "-l", "/", NULL);
+                    execlp("./a.out", "./a.out", NULL);
                     perror("execlp");
                     exit(EXIT_FAILURE);
                 }
