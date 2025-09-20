@@ -58,6 +58,9 @@ int recv_fd(int socket) {
 int main(int argc, char **argv) {
 
     int workers = WORKER_COUNT;
+    if (argc == 1) {
+        fprintf(stderr, "Error: you must provide a path containing the executables\n");
+    }
     if (argc > 1) {
         const char *offset = strchr(argv[1], '=');
         if (!offset) {

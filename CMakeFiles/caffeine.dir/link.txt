@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/caffeine.dir/src/caffeine.c.o CMakeFiles/caffeine.dir/src/worker.c.o -o caffeine 

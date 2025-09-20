@@ -11,6 +11,9 @@ INSTALL_PREFIX=${1:-$HOME/.local}
 # Create the build directory if it doesn't exist
 mkdir -p "$BUILD_DIR"
 
+# Create default config folder
+mkdir -p $HOME/.config/caffeine
+
 # Navigate into the build directory
 cd "$BUILD_DIR"
 

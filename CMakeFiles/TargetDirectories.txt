@@ -1,0 +1,7 @@
+/home/mcipolla/caffeine/CMakeFiles/caffeine.dir
+/home/mcipolla/caffeine/CMakeFiles/edit_cache.dir
+/home/mcipolla/caffeine/CMakeFiles/rebuild_cache.dir
+/home/mcipolla/caffeine/CMakeFiles/list_install_components.dir
+/home/mcipolla/caffeine/CMakeFiles/install.dir
+/home/mcipolla/caffeine/CMakeFiles/install/local.dir
+/home/mcipolla/caffeine/CMakeFiles/install/strip.dir
