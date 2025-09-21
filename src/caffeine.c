@@ -61,6 +61,7 @@ int main(int argc, char **argv) {
     if (argc == 1) {
         fprintf(stderr, "Error: you must provide a path containing the executables\n");
     }
+    // to check, it's not working now as expected. Need to store the default location for executable, default is $HOME/.config/caffeine
     if (argc > 1) {
         const char *offset = strchr(argv[1], '=');
         if (!offset) {
@@ -113,8 +114,9 @@ int main(int argc, char **argv) {
     server_addr.sin_port = htons(8080);
     
     bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
-    listen(listen_fd, 10);
-    
+    if (listen(listen_fd, 10) < 0) {
+        fprintf(stderr, "Couldn't listen on port 8080...\n");
+    }
     printf("Parent listening for web requests on port 8080...\n");
     
     // Accept connections from workers
