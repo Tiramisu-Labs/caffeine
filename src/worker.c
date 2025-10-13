@@ -1,4 +1,25 @@
-#include "../include/caffeine.h"
+#include <caffeine.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+ssize_t write_fully(int fd, const char *buf, size_t count) {
+    size_t total_written = 0;
+    while (total_written < count) {
+        ssize_t n = write(fd, buf + total_written, count - total_written);
+        if (n < 0) {
+            // Handle interrupt (EINTR) by retrying, or hard failure (EAGAIN/EWOULDBLOCK, etc.)
+            if (errno == EINTR) continue;
+            return -1; // Critical write failure
+        }
+        if (n == 0) {
+            // Should not happen for write, but safety first
+            return -1;
+        }
+        total_written += n;
+    }
+    return total_written;
+}
 
 void handle_request(int client_fd) {
     char header_buffer[4096];
@@ -6,7 +27,7 @@ void handle_request(int client_fd) {
     ssize_t total_bytes_read = 0;
     char *end_of_headers;
     
-    // Read in a loop until we find the end of the headers
+    // find the headers
     while (total_bytes_read < sizeof(header_buffer) - 1) {
         bytes_read = read(client_fd, header_buffer + total_bytes_read, sizeof(header_buffer) - 1 - total_bytes_read);
         if (bytes_read <= 0) {
@@ -17,7 +38,7 @@ void handle_request(int client_fd) {
         header_buffer[total_bytes_read] = '\0';
         end_of_headers = strstr(header_buffer, "\r\n\r\n");
         if (end_of_headers) {
-            break; // Found the end of the headers, exit the loop
+            break;
         }
     }
     
@@ -60,7 +81,6 @@ void handle_request(int client_fd) {
              return;
         }
     } else {
-        // No path found, use a default handler name. Still need to be build
         strncpy(handler_name, "handler.py", sizeof(handler_name));
         snprintf(full_path, sizeof(full_path), "%s%s", base_path, handler_name);
     }
@@ -79,9 +99,17 @@ void handle_request(int client_fd) {
     }
 
     if (handler_pid == 0) {
-        // Child process
         close(stdin_pipe[1]);
         close(stdout_pipe[0]);
+
+        int dev_null = open("/dev/null", O_WRONLY);
+        if (dev_null < 0) { 
+            perror("open /dev/null");
+            exit(EXIT_FAILURE); 
+        }
+
+        dup2(dev_null, STDERR_FILENO);
+        close(dev_null);
 
         dup2(stdin_pipe[0], STDIN_FILENO);
         dup2(stdout_pipe[1], STDOUT_FILENO);
@@ -89,20 +117,18 @@ void handle_request(int client_fd) {
         close(stdin_pipe[0]);
         close(stdout_pipe[1]);
         
-        // Use the full path for the executable and the handler name for argv[0]
         execlp(full_path, handler_name, NULL);
         perror("execlp");
         exit(EXIT_FAILURE);
     }
     
-    // Worker process
     close(stdin_pipe[0]);
     close(stdout_pipe[1]);
 
-    // Write the complete headers that have already been read
+    // write the headers
     write(stdin_pipe[1], header_buffer, total_bytes_read);
 
-    // Stream the rest of the body
+    // stream the rest of the body
     int content_length = 0;
     char* cl_header = strstr(header_buffer, "Content-Length: ");
     if (cl_header) {
@@ -122,16 +148,23 @@ void handle_request(int client_fd) {
 
     char response_buffer[4096];
     ssize_t response_bytes_read;
+    ssize_t bytes_written;
+
     while ((response_bytes_read = read(stdout_pipe[0], response_buffer, sizeof(response_buffer))) > 0) {
-        write(client_fd, response_buffer, response_bytes_read);
+        bytes_written = write_fully(client_fd, response_buffer, response_bytes_read);
+        if (bytes_written < 0) break; 
     }
 
-    waitpid(handler_pid, NULL, 0);
     close(stdout_pipe[0]);
+    // if (shutdown(client_fd, SHUT_WR) < 0) {
+    //     perror("shutdown SHUT_WR");
+    // }
+    waitpid(handler_pid, NULL, 0);
     close(client_fd);
 }
 
-void exec_worker(void) {
+void exec_worker() {    
+    // create a new socket for this worker to connect back to the parent
     int ipc_socket = socket(AF_UNIX, SOCK_STREAM, 0);
     if (ipc_socket < 0) {
         perror("worker socket");
@@ -143,20 +176,32 @@ void exec_worker(void) {
     ipc_addr.sun_family = AF_UNIX;
     strncpy(ipc_addr.sun_path, SOCKET_PATH, sizeof(ipc_addr.sun_path) - 1);
 
-    while (connect(ipc_socket, (struct sockaddr *)&ipc_addr, sizeof(ipc_addr)) < 0) {
-        sleep(1); // Wait for the parent to set up
-    }
+    // connect to the parent's listening socket
+    while (connect(ipc_socket, (struct sockaddr *)&ipc_addr, sizeof(ipc_addr)) < 0) sleep(1);
     
     printf("Worker (PID %d) connected to parent.\n", getpid());
 
+    char ready_signal = 'R';
+    if (write(ipc_socket, &ready_signal, 1) < 0) {
+        perror("initial ready signal write");
+        close(ipc_socket);
+        exit(EXIT_FAILURE);
+    }
+    
     while (1) {
-        int client_fd = recv_fd(ipc_socket);
+        int client_fd = recv_fd(ipc_socket); 
+        
         if (client_fd < 0) {
             printf("Worker exiting...\n");
             break;
         }
-        printf("Worker (PID %d) received client FD %d.\n", getpid(), client_fd);
+        printf("Worker (PID %d) received client FD %d. Handling request...\n", getpid(), client_fd);
         handle_request(client_fd);
+
+        if (write(ipc_socket, &ready_signal, 1) < 0) {
+            perror("ready signal write");
+            break;
+        }
     }
 
     close(ipc_socket);

@@ -1,6 +1,5 @@
-#include "../include/caffeine.h"
+#include <caffeine.h>
 
-// The send_fd function from before
 int send_fd(int socket, int fd_to_send) {
     struct msghdr msg = {0};
     struct iovec iov[1];
@@ -28,7 +27,6 @@ int send_fd(int socket, int fd_to_send) {
     return 0;
 }
 
-// The recv_fd function from before
 int recv_fd(int socket) {
     struct msghdr msg = {0};
     struct iovec iov[1];
@@ -96,17 +94,22 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
     
+    // Array to hold the connected worker FDs
+    int worker_fds[workers];
+
     // Fork the worker processes
     for (int i = 0; i < workers; i++) {
         pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork");
-            exit(EXIT_FAILURE);
-        }
-        if (pid == 0) exec_worker();
+        if (pid < 0) { perror("fork"); exit(EXIT_FAILURE); }
+        if (pid == 0) {
+            close(ipc_socket);
+            exec_worker();
+        } // Pass the listening socket to the worker
     }
 
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int optval = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -118,33 +121,56 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Couldn't listen on port 8080...\n");
     }
     printf("Parent listening for web requests on port 8080...\n");
-    
-    // Accept connections from workers
-    int worker_fds[workers];
+
+    printf("Parent accepting connections from %d workers...\n", workers);
     for (int i = 0; i < workers; i++) {
         worker_fds[i] = accept(ipc_socket, NULL, NULL);
-        if (worker_fds[i] < 0) {
-            perror("ipc accept");
-            exit(EXIT_FAILURE);
-        }
+        if (worker_fds[i] < 0) { perror("ipc accept"); exit(EXIT_FAILURE); }
+        printf("Worker %d connected on FD %d.\n", i, worker_fds[i]);
+    }
+    close(ipc_socket);
+
+    struct pollfd pfds[workers];
+    for (int i = 0; i < workers; i++) {
+        pfds[i].fd = worker_fds[i];
+        pfds[i].events = POLLIN;
     }
     
-    int next_worker = 0;
     while (1) {
         int client_fd = accept(listen_fd, NULL, NULL);
         if (client_fd < 0) {
+            if (errno == EINTR) continue;
             perror("accept");
             continue;
         }
 
-        send_fd(worker_fds[next_worker], client_fd);
-        printf("Sent client FD %d to worker %d.\n", client_fd, next_worker);
-        close(client_fd);
-        
-        next_worker = (next_worker + 1) % workers;
+        if (poll(pfds, workers, -1) < 0) {
+            if (errno == EINTR) continue;
+            perror("poll");
+            close(client_fd);
+            continue;
+        }
+
+        for (int i = 0; i < workers; i++) {
+            if (pfds[i].revents & POLLIN) {
+                char ready_byte;
+                ssize_t bytes_read = read(pfds[i].fd, &ready_byte, 1); 
+                
+                if (bytes_read <= 0) {
+                    fprintf(stderr, "Worker %d disconnected. Reaping.\n", i);
+                    // TODO: respawn the worker here
+                    break; 
+                }
+
+                send_fd(pfds[i].fd, client_fd);
+                printf("Dispatched client FD %d to ready worker %d.\n", client_fd, i);
+                close(client_fd);
+                break;
+            }
+        }
     }
 
     close(listen_fd);
-    close(ipc_socket);
+    for (int i = 0; i < workers; i++) close(worker_fds[i]);
     return 0;
 }
