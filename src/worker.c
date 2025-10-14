@@ -8,14 +8,11 @@ ssize_t write_fully(int fd, const char *buf, size_t count) {
     while (total_written < count) {
         ssize_t n = write(fd, buf + total_written, count - total_written);
         if (n < 0) {
-            // Handle interrupt (EINTR) by retrying, or hard failure (EAGAIN/EWOULDBLOCK, etc.)
             if (errno == EINTR) continue;
-            return -1; // Critical write failure
-        }
-        if (n == 0) {
-            // Should not happen for write, but safety first
             return -1;
         }
+        if (n == 0) return -1;
+
         total_written += n;
     }
     return total_written;
@@ -47,7 +44,6 @@ void handle_request(int client_fd) {
         return;
     }
 
-    const char *base_path = "/home/mcipolla/.config/caffeine/";
     char full_path[4096];
     char handler_name[256];
 
@@ -72,17 +68,17 @@ void handle_request(int client_fd) {
             
             strncpy(handler_name, path_start + 1, path_len);
             handler_name[path_len] = '\0';
-            snprintf(full_path, sizeof(full_path), "%s%s", base_path, handler_name);
+            snprintf(full_path, sizeof(full_path), "%s%s", cfg.exec_path, handler_name);
         } else {
             printf("bad request\n");
-             const char* bad_request = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
-             write(client_fd, bad_request, strlen(bad_request));
-             close(client_fd);
-             return;
+            const char* bad_request = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+            write(client_fd, bad_request, strlen(bad_request));
+            close(client_fd);
+            return;
         }
     } else {
         strncpy(handler_name, "handler.py", sizeof(handler_name));
-        snprintf(full_path, sizeof(full_path), "%s%s", base_path, handler_name);
+        snprintf(full_path, sizeof(full_path), "%s%s", cfg.exec_path, handler_name);
     }
     int stdin_pipe[2], stdout_pipe[2];
     if (pipe(stdin_pipe) < 0 || pipe(stdout_pipe) < 0) {
@@ -155,11 +151,12 @@ void handle_request(int client_fd) {
         if (bytes_written < 0) break; 
     }
 
-    close(stdout_pipe[0]);
+    
     // if (shutdown(client_fd, SHUT_WR) < 0) {
     //     perror("shutdown SHUT_WR");
     // }
     waitpid(handler_pid, NULL, 0);
+    close(stdout_pipe[0]);
     close(client_fd);
 }
 

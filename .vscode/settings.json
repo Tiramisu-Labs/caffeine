@@ -1,5 +1,7 @@
 {
     "files.associations": {
-        "wait.h": "c"
+        "wait.h": "c",
+        "types.h": "c",
+        "fcntl.h": "c"
     }
 }

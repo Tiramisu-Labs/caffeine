@@ -16,10 +16,26 @@
 #include <arpa/inet.h>
 
 #define SOCKET_PATH "/tmp/webserver.sock"
-#define WORKER_COUNT 4
+#define DEFAULT_WORKERS 4
+#define DEFAULT_PORT 8080
+#define DEFAULT_LOG_LEVEL "INFO"
+
+typedef struct {
+    int port;
+    int workers;
+    int daemonize;
+    int show_log;
+    char *exec_path;
+    char *log_level;
+}   config_t;
+
+extern config_t cfg;
 
 int send_fd(int socket, int fd_to_send);
 int recv_fd(int socket);
 void exec_worker();
+
+char* get_log_path();
+void daemonize();
 
 #endif
