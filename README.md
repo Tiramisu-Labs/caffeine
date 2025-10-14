@@ -17,7 +17,7 @@ The key to this design is the use of Unix Domain Sockets for Inter-Process Commu
 
 **Dynamic Load Balancing with poll()**: The parent does not use a simple Round-Robin system. Instead, the load balancing is dynamic and event-driven:
 
- 1. **Worker Readiness**: After a worker finishes processing a request, it writes a single "ready" byte back to the parent over its dedicated IPC channel.
+1. **Worker Readiness**: After a worker finishes processing a request, it writes a single "ready" byte back to the parent over its dedicated IPC channel.
 
 2. **Parent Polling**: The parent process uses the poll() system call to monitor all worker IPC channels for this "ready" byte. poll() blocks the parent until at least one worker is available.
 
@@ -27,7 +27,38 @@ This dynamic system ensures that the client request is always dispatched to the 
 
 **Direct Communication**: Once a worker receives the file descriptor, it now has a direct connection to the client. It handles the entire request-response cycle from that point on, keeping the parent process free to accept new connections.
 
+## Configuration and Management
+Caffeine supports configuration via command-line arguments, with sane defaults for quick startup.
 
+| Option | Shorthand | Default Value | Description |
+| ------ | --------- | ------------- | ----------- |
+| --path | N/A | ~/.config/caffeine/ | The base directory where the server looks for handler executables. |
+| --port | N/A | 8080 | The TCP port the server listens on for web requests. |
+| -- workers | N/A | 4 | The number of worker processes to fork and manage. |
+| --log-level | N/A | INFO | Set the verbosity of the server output (DEBUG, INFO, WARN, ERROR). |
+| --daemon | -d | Disabled | Runs the server in the background, detached from the terminal. |
+| --log | N/A | N/A | Displays the contents of the log file and exits. |
+| --help | -h | N/A | Display the help message and exit. |
+
+### Configuration File (TODO)
+The server is planned to support an external configuration file (e.g., ~/.config/caffeine/caffeine.conf) to manage persistent settings. Command-line options will always override file settings.
+
+## Logging and Daemon Management
+### Logging
+All output (including *INFO*, *WARN*, and *ERROR* messages) is directed to a log file, which is automatically created in a user-writable location:
+**Default Log Path**: $HOME/.local/share/caffeine/caffeine.log
+
+Each log entry includes a **timestamp** and the Process ID (PID) for tracing. (TODO)
+
+### Running as a Daemon
+To run Caffeine as a robust background service:
+1. Use the --daemon or -d flag.
+2. The parent process will exit immediately, and the server will continue running in the background.
+3. The daemon's PID is recorded in the /tmp/caffeine.pid file.
+
+### Managing the Daemon
+- **View Logs:** ./caffeine --log
+- **Stop/Kil:**: kill $(cat /tmp/caffeine.pid)
 
 ## Getting Started
 ### Prerequisites
@@ -46,12 +77,12 @@ chmod +x build.sh
 cd build
 make install
 ```
-By deault, the script will install the binary in $HOME/.local. If you want to specify a different path, simply pass it to the script:
+By deault, the script will install the binary in $HOME/.local/bin. If you want to specify a different path, simply pass it to the script:
 ```
 ./build.sh /usr/local
 ```
 - now you can run the server using
 ```
-./caffeine
+caffeine
 ```
-By default the server listen on port 8080 and spawn 4 workers. Use --workers and -- port to modify this values
+By default the server listen on port 8080 and spawn 4 workers. Use --workers and --port to modify this values
