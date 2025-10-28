@@ -26,6 +26,7 @@ void handle_request(int client_fd) {
     ssize_t total_bytes_read = 0;
     char *end_of_headers;
     
+    LOG_DEBUG("Handler (PID %d): Starting request for FD %d.", getpid(), client_fd);
     // find the headers
     while (total_bytes_read < sizeof(header_buffer) - 1) {
         bytes_read = read(client_fd, header_buffer + total_bytes_read, sizeof(header_buffer) - 1 - total_bytes_read);
@@ -45,7 +46,7 @@ void handle_request(int client_fd) {
         close(client_fd);
         return;
     }
-
+    LOG_DEBUG("Handler (PID %d): Headers read and terminated.", getpid());
     char full_path[4096];
     char handler_name[256];
 
@@ -82,7 +83,7 @@ void handle_request(int client_fd) {
         close(client_fd);
         return;
     }
-
+    LOG_DEBUG("Handler (PID %d): Preparing to fork handler process for '%s'.", getpid(), full_path);
     pid_t handler_pid = fork();
     if (handler_pid < 0) {
         LOG_ERROR("fork: %s", strerror(errno));
@@ -91,6 +92,7 @@ void handle_request(int client_fd) {
     }
 
     if (handler_pid == 0) {
+        LOG_DEBUG("Grandchild (PID %d): Executing '%s'.", getpid(), full_path);
         close(stdin_pipe[1]);
         close(stdout_pipe[0]);
 
@@ -141,7 +143,7 @@ void handle_request(int client_fd) {
     char response_buffer[4096] = {0};
     ssize_t response_bytes_read;
     ssize_t bytes_written;
-
+    LOG_DEBUG("Handler (PID %d): Starting response stream to client.", getpid());
     while ((response_bytes_read = read(stdout_pipe[0], response_buffer, sizeof(response_buffer))) > 0) {
         bytes_written = write_fully(client_fd, response_buffer, response_bytes_read);
         if (bytes_written < 0) break; 
@@ -150,10 +152,11 @@ void handle_request(int client_fd) {
     if (strlen(response_buffer) == 0) {
         write(client_fd, NOT_FOUND, strlen(NOT_FOUND));
     }
-    
+    LOG_DEBUG("Handler (PID %d): Waiting for grandchild PID %d to exit.", getpid(), handler_pid);
     waitpid(handler_pid, NULL, 0);
     close(stdout_pipe[0]);
     close(client_fd);
+    LOG_DEBUG("Handler (PID %d): Request complete and FD %d closed.", getpid(), client_fd);
 }
 
 
@@ -185,15 +188,18 @@ void exec_worker() {
     }
     
     while (1) {
+        LOG_DEBUG("Worker (PID %d) waiting for client FD.", getpid());
         int client_fd = recv_fd(ipc_socket); 
-        
+        LOG_DEBUG("Worker (PID %d) successfully received FD %d.", getpid(), client_fd);
         if (client_fd < 0) {
             LOG_INFO("Worker exiting...");
             break;
         }
         LOG_INFO("Worker (PID %d) received client FD %d. Handling request...", getpid(), client_fd);
         handle_request(client_fd);
+        LOG_DEBUG("Worker (PID %d) finished handling request for FD %d.", getpid(), client_fd);
 
+        LOG_DEBUG("Worker (PID %d) signaling parent ready.", getpid());
         if (write(ipc_socket, &ready_signal, 1) < 0) {
             LOG_ERROR("ready signal write: %s", strerror(errno));
             break;

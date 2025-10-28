@@ -21,12 +21,16 @@
 #define DEFAULT_PORT 8080
 #define DEFAULT_LOG_LEVEL "INFO"
 
+#define PID_FILE "/tmp/.caffeine.pid"
+#define LOG_FILE "$HOME/.local/share/caffeine/caffeine.log"
+
 typedef struct {
     int port;
     int workers;
     int daemonize;
     int show_log;
     int reset_log;
+    int stop_server;
     char *exec_path;
     char *log_level;
 }   config_t;

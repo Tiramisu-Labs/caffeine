@@ -6,8 +6,38 @@
 #include <unistd.h>
 #include <string.h>
 #include <ctype.h>
+#include <pwd.h>
 
 log_level_t log_level;
+
+char* get_log_path() {
+    struct passwd *pw = getpwuid(getuid());
+    if (pw == NULL) return NULL;
+    
+    const char *log_dir_suffix = "/.local/share/caffeine";
+    const char *log_file_suffix = "/caffeine.log";
+
+    size_t dir_len = strlen(pw->pw_dir) + strlen(log_dir_suffix);
+    size_t full_len = dir_len + strlen(log_file_suffix) + 1;
+    
+    char *path = malloc(full_len);
+    if (path == NULL) return NULL;
+    
+    snprintf(path, dir_len + 1, "%s%s", pw->pw_dir, log_dir_suffix);
+    
+    struct stat st = {0};
+    if (stat(path, &st) == -1) {
+        if (mkdir(path, 0700) != 0) {
+            LOG_ERROR("mkdir log directory failed: %s", strerror(errno));
+            free(path);
+            return NULL;
+        }
+    }
+
+    snprintf(path + dir_len, full_len - dir_len, "%s", log_file_suffix);
+    LOG_DEBUG("Log path resolved to: %s", path);
+    return path;
+}
 
 const char* log_level_to_str(log_level_t level) {
     switch (level) {

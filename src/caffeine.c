@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <pwd.h>
 #include <string.h>
+#include <caffeinesig.h>
 
 void display_help(const char *progname) {
     printf("Usage: %s [OPTIONS]\n", progname);
@@ -17,8 +18,15 @@ void display_help(const char *progname) {
     printf("  --log-level=<level>   Set logging verbosity (DEBUG, INFO, WARN, ERROR) (Default: %s).\n", DEFAULT_LOG_LEVEL);
     printf("  --log                 Show logs file\n");
     printf("  --reset-logs          Clear the log file\n");
+    printf("  --stop                Stop the running server and all the workers\n");
     exit(EXIT_SUCCESS);
 }
+
+#include <signal.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <log.h>
 
 void display_log_file() {
     char *log_path = get_log_path();
@@ -85,13 +93,14 @@ void parse_arguments(int argc, char **argv, config_t *cfg) {
         if (!strcmp(arg, "--log")) {
             cfg->show_log = 1;
             continue;
-        }
-        
-        if (!strcmp(arg, "--reset-logs")) {
+        } else if (!strcmp(arg, "--reset-logs")) {
             cfg->reset_log = 1;
             continue;
+        } else if (!strcmp(arg, "--stop")) {
+            cfg->stop_server = 1;
+            continue;
         }
-        
+
         char *value = strchr(arg, '=');
         if (value == NULL) {
              fprintf(stderr, "error: Invalid argument or missing value for %s\n", arg);
@@ -169,18 +178,30 @@ config_t cfg; // global cfg file so it is inherited by workers processes
 int main(int argc, char **argv) {
     parse_arguments(argc, argv, &cfg);
     set_log_level(cfg.log_level);
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigterm_handler;
+    sigaction(SIGTERM, &sa, NULL);
+    
     if (cfg.show_log) {
         display_log_file();
         return(EXIT_SUCCESS);
     }
     if (cfg.reset_log) {
         reset_log_file();
+        return(EXIT_SUCCESS);
     }
     if (cfg.daemonize) {
         LOG_INFO("starting Caffeine server as a daemon...\n");
         daemonize();
     }
     
+    if (cfg.stop_server) {
+        stop_server();
+        return EXIT_SUCCESS;
+    }
+
     unlink(SOCKET_PATH);
     
     int ipc_socket = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -219,6 +240,7 @@ int main(int argc, char **argv) {
         } // Pass the listening socket to the worker
         worker_pids[i] = pid;
     }
+    LOG_DEBUG("Parent finished forking %d workers.", cfg.workers);
 
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     int optval = 1;
@@ -242,6 +264,7 @@ int main(int argc, char **argv) {
             LOG_ERROR("ipc accept: %s", strerror(errno));
             exit(EXIT_FAILURE);
         }
+        LOG_DEBUG("Parent accepted IPC connection from worker %d on FD %d.", i, worker_fds[i]);
         LOG_INFO("Worker %d connected on FD %d.", i, worker_fds[i]);
     }
     close(ipc_socket);
@@ -253,7 +276,12 @@ int main(int argc, char **argv) {
     }
     
     while (1) {
+        if (shutdown_requested) {
+            break;
+        }
+        LOG_DEBUG("Parent loop start. Listening for new client on FD %d.", listen_fd);
         int client_fd = accept(listen_fd, NULL, NULL);
+        LOG_DEBUG("Parent accepted client FD %d.", client_fd);
         if (client_fd < 0) {
             if (errno == EINTR) continue;
             LOG_ERROR("accept: %s", strerror(errno));
@@ -262,12 +290,13 @@ int main(int argc, char **argv) {
 
         int flags = fcntl(client_fd, F_GETFD);
         if (flags != -1) fcntl(client_fd, F_SETFD, flags | FD_CLOEXEC);
+        LOG_DEBUG("Parent polling workers for readiness...");
         if (poll(pfds, cfg.workers, -1) < 0) {
             if (errno == EINTR) continue;
             LOG_ERROR("poll: %s", strerror(errno));
             continue;
         }
-
+        LOG_DEBUG("Poll returned. Checking for ready worker for client FD %d.", client_fd);
         for (int i = 0; i < cfg.workers; i++) {
             int worker_ipc_fd = worker_fds[i];
             if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
@@ -281,14 +310,18 @@ int main(int argc, char **argv) {
                 }
 
                 send_fd(pfds[i].fd, client_fd);
+                LOG_DEBUG("Parent sent FD %d to worker %d.", client_fd, i);
                 LOG_INFO("Dispatched client FD %d to ready worker %d.", client_fd, i);
                 close(client_fd);
                 break;
             }
         }
     }
+    LOG_INFO("Parent performing cleanup and exiting.");
 
     close(listen_fd);
     for (int i = 0; i < cfg.workers; i++) close(worker_fds[i]);
+    unlink(SOCKET_PATH);
+    remove(PID_FILE);
     return 0;
 }
