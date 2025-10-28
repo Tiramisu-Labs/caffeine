@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <arpa/inet.h>
+#include <signal.h>
 
 #define SOCKET_PATH "/tmp/webserver.sock"
 #define DEFAULT_WORKERS 4
@@ -25,6 +26,7 @@ typedef struct {
     int workers;
     int daemonize;
     int show_log;
+    int reset_log;
     char *exec_path;
     char *log_level;
 }   config_t;

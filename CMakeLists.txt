@@ -10,7 +10,7 @@ include_directories(include)
 
 # Create an executable named 'caffeine' from the source files
 # The executable will be built from caffeine.c and worker.c
-add_executable(caffeine src/caffeine.c src/worker.c src/daemon.c)
+add_executable(caffeine src/caffeine.c src/worker.c src/daemon.c src/log.c)
 
 # Define the installation rule for the executable
 # It will install the 'caffeine' executable to the 'bin' directory

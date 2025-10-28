@@ -1,4 +1,5 @@
 #include <caffeine.h>
+#include <log.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <pwd.h>
@@ -14,6 +15,8 @@ void display_help(const char *progname) {
     printf("  --port=<port>         Set the listening port (Default: %d).\n", DEFAULT_PORT);
     printf("  --workers=<num>       Set the number of worker processes (Default: %d).\n", DEFAULT_WORKERS);
     printf("  --log-level=<level>   Set logging verbosity (DEBUG, INFO, WARN, ERROR) (Default: %s).\n", DEFAULT_LOG_LEVEL);
+    printf("  --log                 Show logs file\n");
+    printf("  --reset-logs          Clear the log file\n");
     exit(EXIT_SUCCESS);
 }
 
@@ -21,7 +24,7 @@ void display_log_file() {
     char *log_path = get_log_path();
     int fd = open(log_path, O_RDONLY);
     if (fd < 0) {
-        fprintf(stderr, "Error: Could not open log file at %s: %s\n", log_path, strerror(errno));
+        LOG_ERROR("Error: Could not open log file at %s: %s\n", log_path, strerror(errno));
         return;
     }
 
@@ -30,11 +33,21 @@ void display_log_file() {
 
     while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
         if (write(STDOUT_FILENO, buffer, bytes_read) < 0) {
-            perror("Error writing to stdout");
+            LOG_ERROR("Error writing to stdout: %s", strerror(errno));
             break;
         }
     }
     free(log_path);
+    close(fd);
+}
+
+void reset_log_file() {
+    char *log_path = get_log_path();
+    int fd = open(log_path, O_WRONLY | O_TRUNC);
+    if (fd < 0) {
+        LOG_ERROR("Error: Could not open log file at %s: %s\n", log_path, strerror(errno));
+        return;
+    }
     close(fd);
 }
 
@@ -71,6 +84,11 @@ void parse_arguments(int argc, char **argv, config_t *cfg) {
 
         if (!strcmp(arg, "--log")) {
             cfg->show_log = 1;
+            continue;
+        }
+        
+        if (!strcmp(arg, "--reset-logs")) {
+            cfg->reset_log = 1;
             continue;
         }
         
@@ -114,7 +132,7 @@ int send_fd(int socket, int fd_to_send) {
     *(int *)CMSG_DATA(cmsg) = fd_to_send;
 
     if (sendmsg(socket, &msg, 0) < 0) {
-        perror("sendmsg");
+        LOG_ERROR("sendmsg: %s", strerror(errno));
         return -1;
     }
     return 0;
@@ -135,7 +153,7 @@ int recv_fd(int socket) {
     msg.msg_controllen = sizeof(control_buffer);
 
     if (recvmsg(socket, &msg, 0) < 0) {
-        perror("recvmsg");
+        LOG_ERROR("recvmsg: %s", strerror(errno));
         return -1;
     }
 
@@ -150,13 +168,16 @@ config_t cfg; // global cfg file so it is inherited by workers processes
 
 int main(int argc, char **argv) {
     parse_arguments(argc, argv, &cfg);
-
+    set_log_level(cfg.log_level);
     if (cfg.show_log) {
         display_log_file();
         return(EXIT_SUCCESS);
     }
+    if (cfg.reset_log) {
+        reset_log_file();
+    }
     if (cfg.daemonize) {
-        printf("starting Caffeine server as a daemon...\n");
+        LOG_INFO("starting Caffeine server as a daemon...\n");
         daemonize();
     }
     
@@ -164,7 +185,7 @@ int main(int argc, char **argv) {
     
     int ipc_socket = socket(AF_UNIX, SOCK_STREAM, 0);
     if (ipc_socket < 0) {
-        perror("ipc socket");
+        LOG_ERROR("ipc socket: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
 
@@ -174,25 +195,29 @@ int main(int argc, char **argv) {
     strncpy(ipc_addr.sun_path, SOCKET_PATH, sizeof(ipc_addr.sun_path) - 1);
 
     if (bind(ipc_socket, (struct sockaddr *)&ipc_addr, sizeof(ipc_addr)) < 0) {
-        perror("ipc bind");
+        LOG_ERROR("ipc bind: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
     if (listen(ipc_socket, cfg.workers) < 0) {
-        perror("ipc listen");
+        LOG_ERROR("ipc listen: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
     
     // Array to hold the connected worker FDs
     int worker_fds[cfg.workers];
-
+    pid_t worker_pids[cfg.workers];
     // Fork the worker processes
     for (int i = 0; i < cfg.workers; i++) {
         pid_t pid = fork();
-        if (pid < 0) { perror("fork"); exit(EXIT_FAILURE); }
+        if (pid < 0) {
+            LOG_ERROR("fork: %s", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
         if (pid == 0) {
             close(ipc_socket);
             exec_worker();
         } // Pass the listening socket to the worker
+        worker_pids[i] = pid;
     }
 
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -202,19 +227,22 @@ int main(int argc, char **argv) {
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(8080);
+    server_addr.sin_port = htons(cfg.port);
     
     bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
     if (listen(listen_fd, 10) < 0) {
-        fprintf(stderr, "Couldn't listen on port 8080...\n");
+        LOG_ERROR("Couldn't listen on port %d...", cfg.port);
     }
-    printf("Parent listening for web requests on port 8080...\n");
+    LOG_INFO("Parent listening for web requests on port %d...", cfg.port);
 
-    printf("Parent accepting connections from %d workers...\n", cfg.workers);
+    LOG_INFO("Parent accepting connections from %d workers...", cfg.workers);
     for (int i = 0; i < cfg.workers; i++) {
         worker_fds[i] = accept(ipc_socket, NULL, NULL);
-        if (worker_fds[i] < 0) { perror("ipc accept"); exit(EXIT_FAILURE); }
-        printf("Worker %d connected on FD %d.\n", i, worker_fds[i]);
+        if (worker_fds[i] < 0) {
+            LOG_ERROR("ipc accept: %s", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+        LOG_INFO("Worker %d connected on FD %d.", i, worker_fds[i]);
     }
     close(ipc_socket);
 
@@ -228,7 +256,7 @@ int main(int argc, char **argv) {
         int client_fd = accept(listen_fd, NULL, NULL);
         if (client_fd < 0) {
             if (errno == EINTR) continue;
-            perror("accept");
+            LOG_ERROR("accept: %s", strerror(errno));
             continue;
         }
 
@@ -236,23 +264,24 @@ int main(int argc, char **argv) {
         if (flags != -1) fcntl(client_fd, F_SETFD, flags | FD_CLOEXEC);
         if (poll(pfds, cfg.workers, -1) < 0) {
             if (errno == EINTR) continue;
-            perror("poll");
+            LOG_ERROR("poll: %s", strerror(errno));
             continue;
         }
 
         for (int i = 0; i < cfg.workers; i++) {
-            if (pfds[i].revents & POLLIN) {
+            int worker_ipc_fd = worker_fds[i];
+            if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
                 char ready_byte;
                 ssize_t bytes_read = read(pfds[i].fd, &ready_byte, 1);
                 
                 if (bytes_read <= 0) {
-                    fprintf(stderr, "Worker %d disconnected. Reaping.\n", i);
+                    LOG_ERROR("Worker %d disconnected. Reaping.\n", i);
                     // TODO: respawn the worker here
                     break; 
                 }
 
                 send_fd(pfds[i].fd, client_fd);
-                printf("Dispatched client FD %d to ready worker %d.\n", client_fd, i);
+                LOG_INFO("Dispatched client FD %d to ready worker %d.", client_fd, i);
                 close(client_fd);
                 break;
             }

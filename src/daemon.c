@@ -7,6 +7,8 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <string.h>
+#include <log.h>
+#include <errno.h>
 
 #define PID_FILE "/tmp/caffeine.pid"
 #define LOG_FILE "/var/log/caffeine.log"
@@ -29,7 +31,7 @@ char* get_log_path() {
     struct stat st = {0};
     if (stat(path, &st) == -1) {
         if (mkdir(path, 0700) != 0) {
-            perror("mkdir log directory failed");
+            LOG_ERROR("mkdir log directory failed: %s", strerror(errno));
             free(path);
             return NULL;
         }
@@ -46,19 +48,19 @@ void daemonize() {
 
     pid = fork();
     if (pid < 0) {
-        perror("fork");
+        LOG_ERROR("fork: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
     if (pid > 0) exit(EXIT_SUCCESS); 
 
     sid = setsid();
     if (sid < 0) {
-        perror("setsid");
+        LOG_ERROR("setsid: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
 
     if (chdir("/") < 0) {
-        perror("chdir");
+        LOG_ERROR("chdir: %s", strerror(errno));
     }
 
     umask(0);
@@ -85,14 +87,14 @@ void daemonize() {
 
     fd = open(PID_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
-        perror("open pid file");
+        LOG_ERROR("open pid file: ", strerror(errno));
         // Daemon should exit if it can't record its PID
         exit(EXIT_FAILURE); 
     }
 
     snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
     if (write(fd, pid_str, strlen(pid_str)) < 0) {
-        perror("write pid file");
+        LOG_ERROR("write pid file: ", strerror(errno));
         
         printf("removing file '%s'...\n", PID_FILE);
         if (remove(PID_FILE) == 0) printf("file '%s' removed\n", PID_FILE);

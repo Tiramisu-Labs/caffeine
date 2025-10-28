@@ -1,4 +1,6 @@
 #include <caffeine.h>
+#include <log.h>
+#include <response.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -52,16 +54,14 @@ void handle_request(int client_fd) {
         char *path_end = strchr(path_start, ' ');
         if (path_end) {
             if (strstr(path_start, "..")) {
-                const char* forbidden_response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
-                write(client_fd, forbidden_response, strlen(forbidden_response));
+                write(client_fd, FORBIDDEN, strlen(FORBIDDEN));
                 close(client_fd);
                 return;
             }
             
             size_t path_len = path_end - path_start -1;
             if (path_len >= sizeof(handler_name)) {
-                const char* too_long_response = "HTTP/1.1 414 URI Too Long\r\nContent-Length: 0\r\n\r\n";
-                write(client_fd, too_long_response, strlen(too_long_response));
+                write(client_fd, TOO_LONG, strlen(TOO_LONG));
                 close(client_fd);
                 return;
             }
@@ -70,26 +70,22 @@ void handle_request(int client_fd) {
             handler_name[path_len] = '\0';
             snprintf(full_path, sizeof(full_path), "%s%s", cfg.exec_path, handler_name);
         } else {
-            printf("bad request\n");
-            const char* bad_request = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
-            write(client_fd, bad_request, strlen(bad_request));
+            write(client_fd, BAD_REQUEST, strlen(BAD_REQUEST));
             close(client_fd);
             return;
         }
-    } else {
-        strncpy(handler_name, "handler.py", sizeof(handler_name));
-        snprintf(full_path, sizeof(full_path), "%s%s", cfg.exec_path, handler_name);
     }
+
     int stdin_pipe[2], stdout_pipe[2];
     if (pipe(stdin_pipe) < 0 || pipe(stdout_pipe) < 0) {
-        perror("pipe");
+        LOG_ERROR("pipe: %s", strerror(errno));
         close(client_fd);
         return;
     }
 
     pid_t handler_pid = fork();
     if (handler_pid < 0) {
-        perror("fork");
+        LOG_ERROR("fork: %s", strerror(errno));
         close(client_fd);
         return;
     }
@@ -100,7 +96,7 @@ void handle_request(int client_fd) {
 
         int dev_null = open("/dev/null", O_WRONLY);
         if (dev_null < 0) { 
-            perror("open /dev/null");
+            LOG_ERROR("open /dev/null: %s", strerror(errno));
             exit(EXIT_FAILURE); 
         }
 
@@ -114,7 +110,7 @@ void handle_request(int client_fd) {
         close(stdout_pipe[1]);
         
         execlp(full_path, handler_name, NULL);
-        perror("execlp");
+        LOG_ERROR("execlp: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
     
@@ -142,7 +138,7 @@ void handle_request(int client_fd) {
     }
     close(stdin_pipe[1]);
 
-    char response_buffer[4096];
+    char response_buffer[4096] = {0};
     ssize_t response_bytes_read;
     ssize_t bytes_written;
 
@@ -150,24 +146,27 @@ void handle_request(int client_fd) {
         bytes_written = write_fully(client_fd, response_buffer, response_bytes_read);
         if (bytes_written < 0) break; 
     }
-
     
-    // if (shutdown(client_fd, SHUT_WR) < 0) {
-    //     perror("shutdown SHUT_WR");
-    // }
+    if (strlen(response_buffer) == 0) {
+        write(client_fd, NOT_FOUND, strlen(NOT_FOUND));
+    }
+    
     waitpid(handler_pid, NULL, 0);
     close(stdout_pipe[0]);
     close(client_fd);
 }
 
+
 void exec_worker() {    
     // create a new socket for this worker to connect back to the parent
     int ipc_socket = socket(AF_UNIX, SOCK_STREAM, 0);
     if (ipc_socket < 0) {
-        perror("worker socket");
+        LOG_ERROR("worker socket: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
     
+    signal(SIGPIPE, SIG_IGN);
+
     struct sockaddr_un ipc_addr;
     memset(&ipc_addr, 0, sizeof(ipc_addr));
     ipc_addr.sun_family = AF_UNIX;
@@ -176,11 +175,11 @@ void exec_worker() {
     // connect to the parent's listening socket
     while (connect(ipc_socket, (struct sockaddr *)&ipc_addr, sizeof(ipc_addr)) < 0) sleep(1);
     
-    printf("Worker (PID %d) connected to parent.\n", getpid());
+    LOG_INFO("Worker (PID %d) connected to parent.", getpid());
 
     char ready_signal = 'R';
     if (write(ipc_socket, &ready_signal, 1) < 0) {
-        perror("initial ready signal write");
+        LOG_ERROR("initial ready signal write: %s", strerror(errno));
         close(ipc_socket);
         exit(EXIT_FAILURE);
     }
@@ -189,14 +188,14 @@ void exec_worker() {
         int client_fd = recv_fd(ipc_socket); 
         
         if (client_fd < 0) {
-            printf("Worker exiting...\n");
+            LOG_INFO("Worker exiting...");
             break;
         }
-        printf("Worker (PID %d) received client FD %d. Handling request...\n", getpid(), client_fd);
+        LOG_INFO("Worker (PID %d) received client FD %d. Handling request...", getpid(), client_fd);
         handle_request(client_fd);
 
         if (write(ipc_socket, &ready_signal, 1) < 0) {
-            perror("ready signal write");
+            LOG_ERROR("ready signal write: %s", strerror(errno));
             break;
         }
     }
