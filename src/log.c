@@ -1,4 +1,5 @@
 #include <log.h>
+#include <caffeine.h>
 #include <sys/types.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -8,36 +9,7 @@
 #include <ctype.h>
 #include <pwd.h>
 
-log_level_t log_level;
-
-char* get_log_path() {
-    struct passwd *pw = getpwuid(getuid());
-    if (pw == NULL) return NULL;
-    
-    const char *log_dir_suffix = "/.local/share/caffeine";
-    const char *log_file_suffix = "/caffeine.log";
-
-    size_t dir_len = strlen(pw->pw_dir) + strlen(log_dir_suffix);
-    size_t full_len = dir_len + strlen(log_file_suffix) + 1;
-    
-    char *path = malloc(full_len);
-    if (path == NULL) return NULL;
-    
-    snprintf(path, dir_len + 1, "%s%s", pw->pw_dir, log_dir_suffix);
-    
-    struct stat st = {0};
-    if (stat(path, &st) == -1) {
-        if (mkdir(path, 0700) != 0) {
-            LOG_ERROR("mkdir log directory failed: %s", strerror(errno));
-            free(path);
-            return NULL;
-        }
-    }
-
-    snprintf(path + dir_len, full_len - dir_len, "%s", log_file_suffix);
-    LOG_DEBUG("Log path resolved to: %s", path);
-    return path;
-}
+log_level_t g_log_level;
 
 const char* log_level_to_str(log_level_t level) {
     switch (level) {
@@ -52,7 +24,7 @@ const char* log_level_to_str(log_level_t level) {
 void set_log_level(const char *level_str) {
     char upper_level[10];
     if (level_str == NULL || strlen(level_str) >= sizeof(upper_level)) {
-        log_level = INFO;
+        g_log_level = INFO;
         return;
     }
     
@@ -62,21 +34,21 @@ void set_log_level(const char *level_str) {
     upper_level[strlen(level_str)] = '\0';
 
     if (strcmp(upper_level, "DEBUG") == 0) {
-        log_level = DEBUG;
+        g_log_level = DEBUG;
     } else if (strcmp(upper_level, "INFO") == 0) {
-        log_level = INFO;
+        g_log_level = INFO;
     } else if (strcmp(upper_level, "WARN") == 0) {
-        log_level = WARN;
+        g_log_level = WARN;
     } else if (strcmp(upper_level, "ERROR") == 0) {
-        log_level = ERROR;
+        g_log_level = ERROR;
     } else {
         fprintf(stderr, "Warning: Invalid log level '%s' specified. Defaulting to INFO.\n", level_str);
-        log_level = INFO;
+        g_log_level = INFO;
     }
 }
 
 void server_log(log_level_t level, const char *fmt, ...) {
-    if (level < log_level) {
+    if (level < g_log_level) {
         return;
     }
 

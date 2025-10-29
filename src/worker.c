@@ -1,4 +1,5 @@
 #include <caffeine.h>
+#include <caffeine_utils.h>
 #include <log.h>
 #include <response.h>
 #include <sys/types.h>
@@ -69,7 +70,7 @@ void handle_request(int client_fd) {
             
             strncpy(handler_name, path_start + 1, path_len);
             handler_name[path_len] = '\0';
-            snprintf(full_path, sizeof(full_path), "%s%s", cfg.exec_path, handler_name);
+            snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, handler_name);
         } else {
             write(client_fd, BAD_REQUEST, strlen(BAD_REQUEST));
             close(client_fd);
@@ -173,7 +174,7 @@ void exec_worker() {
     struct sockaddr_un ipc_addr;
     memset(&ipc_addr, 0, sizeof(ipc_addr));
     ipc_addr.sun_family = AF_UNIX;
-    strncpy(ipc_addr.sun_path, SOCKET_PATH, sizeof(ipc_addr.sun_path) - 1);
+    strncpy(ipc_addr.sun_path, get_socket_path(), sizeof(ipc_addr.sun_path) - 1);
 
     // connect to the parent's listening socket
     while (connect(ipc_socket, (struct sockaddr *)&ipc_addr, sizeof(ipc_addr)) < 0) sleep(1);

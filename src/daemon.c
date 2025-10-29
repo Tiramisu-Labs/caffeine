@@ -1,3 +1,4 @@
+#include <caffeine_utils.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -48,10 +49,9 @@ void daemonize() {
     }
 
     if (fd > 2) close(fd);
-    
-    free(log_path);
 
-    fd = open(PID_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    char *pid_file = get_pid_path();
+    fd = open(pid_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         LOG_ERROR("open pid file: ", strerror(errno));
         // Daemon should exit if it can't record its PID

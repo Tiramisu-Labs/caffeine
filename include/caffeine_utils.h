@@ -1,0 +1,12 @@
+#ifndef CAFFEINE_UTILS_H
+#define CAFFEINE_UTILS_H
+
+#include <caffeine.h>
+
+void init_config();
+void free_and_exit(int status);
+char* get_socket_path();
+char* get_pid_path();
+char* get_log_path();
+
+#endif

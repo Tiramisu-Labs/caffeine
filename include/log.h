@@ -32,7 +32,7 @@ typedef enum {
     ERROR
 } log_level_t;
 
-extern log_level_t log_level;
+extern log_level_t g_log_level;
 
 char* get_log_path();
 void server_log(log_level_t level, const char *fmt, ...);

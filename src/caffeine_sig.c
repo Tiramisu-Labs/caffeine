@@ -1,16 +1,18 @@
+#include <caffeine_sig.h>
+#include <caffeine_utils.h>
+#include <caffeine.h>
 #include <log.h>
-#include <caffeinesig.h>
 #include <pwd.h>
 #include <unistd.h>
 #include <fcntl.h>
 
-volatile sig_atomic_t shutdown_requested = 0;
+volatile sig_atomic_t g_shutdown_requested = 0;
 
 void stop_server() {
-    int fd = open(PID_FILE, O_RDONLY);
+    int fd = open(get_pid_path(), O_RDONLY);
     if (fd < 0) {
         LOG_ERROR("PID file not found at %s. Is the server running? %s", 
-                  PID_FILE, strerror(errno));
+                  get_pid_path(), strerror(errno));
         exit(EXIT_FAILURE);
     }
 
@@ -20,7 +22,7 @@ void stop_server() {
 
     if (bytes_read <= 0) {
         LOG_ERROR("Failed to read PID from file.");
-        remove(PID_FILE);
+        remove(get_pid_path());
         exit(EXIT_FAILURE);
     }
     
@@ -31,16 +33,28 @@ void stop_server() {
     } else {
         LOG_ERROR("Failed to send SIGTERM to PID %d: %s", parent_pid, strerror(errno));
         if (errno == ESRCH) {
-            remove(PID_FILE);
-            LOG_WARN("Stale PID file removed: %s", PID_FILE);
+            remove(get_pid_path());
+            LOG_WARN("Stale PID file removed: %s", get_pid_path());
         }
         exit(EXIT_FAILURE);
     }
+    remove(get_pid_path());
 }
 
 void sigterm_handler(int signum) {
     if (signum == SIGTERM) {
-        shutdown_requested = 1;
+        g_shutdown_requested = 1;
         LOG_INFO("Parent received SIGTERM. Initiating graceful shutdown.");
     }
+}
+
+int sig_init()
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigterm_handler;
+    if (sigaction(SIGTERM, &sa, NULL) < 0) {
+        return -1;
+    }
+    return 0;
 }
