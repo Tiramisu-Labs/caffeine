@@ -8,5 +8,7 @@ void free_and_exit(int status);
 char* get_socket_path();
 char* get_pid_path();
 char* get_log_path();
+char* get_default_path();
+void list_running_instances();
 
 #endif

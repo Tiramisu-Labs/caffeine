@@ -1,6 +1,7 @@
 #include <caffeine.h>
 #include <caffeine_sig.h>
 #include <caffeine_utils.h>
+#include <caffeine_cfg.h>
 #include <log.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -58,77 +59,6 @@ void reset_log_file() {
     close(fd);
 }
 
-char* get_default_path() {
-    struct passwd *pw = getpwuid(getuid());
-    if (pw == NULL) return NULL;
-    
-    size_t len = strlen(pw->pw_dir) + strlen("/.config/caffeine/") + 1;
-    char *path = malloc(len);
-    if (path == NULL) return NULL;
-
-    snprintf(path, len, "%s/.config/caffeine/", pw->pw_dir);
-    return path;
-}
-
-void parse_arguments(int argc, char **argv, config_t *g_cfg) {
-    for (int i = 1; i < argc; i++) {
-        char *arg = argv[i];
-        if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
-            if (g_cfg->exec_path) free(g_cfg->exec_path);
-            display_help(argv[0]);
-            exit(EXIT_SUCCESS);
-        }
-
-        if (!strcmp(arg, "-d") || !strcmp(arg, "--daemon")) {
-            g_cfg->daemonize = 1;
-            i++;
-            if (argv[i]) {
-                g_cfg->instance_name = strdup(argv[i]);
-            }
-            continue;
-        } else if (!strcmp(arg, "--log") || !strcmp(arg, "-l")) {
-            g_cfg->show_log = 1;
-            i++;
-            if (argv[i]) {
-                g_cfg->instance_name = strdup(argv[i]);
-            }
-            continue;
-        } else if (!strcmp(arg, "--reset-logs")) {
-            g_cfg->reset_log = 1;
-            continue;
-        } else if (!strcmp(arg, "--stop") || !strcmp(arg, "-s")) {
-            g_cfg->stop_server = 1;
-            i++;
-            if (argv[i]) {
-                g_cfg->instance_name = strdup(argv[i]);
-            }
-            continue;
-        } else if (!strcmp(arg, "--instance-list") || !strcmp(arg, "-L")) {
-            g_cfg->instance_list = 1;
-        }
-
-        char *value = strchr(arg, '=');
-        if (value == NULL) {
-             LOG_ERROR("error: Invalid argument or missing value for %s", arg);
-             free_and_exit(EXIT_FAILURE);
-        }
-        
-        *value = '\0';
-        value++;
-
-        if (strcmp(arg, "--path") == 0) g_cfg->exec_path = strdup(value);
-        else if (strcmp(arg, "--port") == 0) g_cfg->port = atoi(value);
-        else if (strcmp(arg, "--workers") == 0) g_cfg->workers = atoi(value);
-        else if (strcmp(arg, "--log-level") == 0) g_cfg->log_level = strdup(value);
-        else {
-            LOG_ERROR("error: Unknown argument: %s", arg);
-            free_and_exit(EXIT_FAILURE);
-        }
-    }
-    if (!g_cfg->exec_path) g_cfg->exec_path = get_default_path();
-}
-
-
 int send_fd(int socket, int fd_to_send) {
     struct msghdr msg = {0};
     struct iovec iov[1];
@@ -184,35 +114,32 @@ int recv_fd(int socket) {
 
 int main(int argc, char **argv) {
     init_config();
-    parse_arguments(argc, argv, &g_cfg);
     set_log_level(g_cfg.log_level);
     if (sig_init() < 0) {
         LOG_ERROR("failed to init signals: %s", strerror(errno));
     }
-
-    if ((g_cfg.show_log || g_cfg.daemonize || g_cfg.stop_server) && !g_cfg.instance_name) {
-        LOG_ERROR("error: no instace name provided");
-        display_help();
+    if (parse_arguments(argc, argv) < 0) {
         free_and_exit(EXIT_FAILURE);
     }
+
     if (g_cfg.show_log) {
         display_log_file();
         free_and_exit(EXIT_SUCCESS);
     }
-    if (g_cfg.reset_log) {
+    if (g_cfg.reset_logs) {
         reset_log_file();
         free_and_exit(EXIT_SUCCESS);
     }
-    if (g_cfg.daemonize) {
-        LOG_INFO("starting Caffeine server as a daemon...");
-        daemonize();
-    }
     
-    if (g_cfg.stop_server) {
+    if (g_cfg.stop_instance) {
         stop_server();
         free_and_exit(EXIT_SUCCESS);
     }
 
+    if (g_cfg.list_instances) {
+        list_running_instances();
+        free_and_exit(EXIT_SUCCESS);
+    }
     char *socket_path = get_socket_path();
 
     unlink(socket_path);
@@ -263,10 +190,20 @@ int main(int argc, char **argv) {
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(g_cfg.port);
     
-    bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    if (bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        LOG_ERROR("Failed to bind to port %d: %s", g_cfg.port, strerror(errno));
+        free_and_exit(EXIT_FAILURE);
+    }
     if (listen(listen_fd, 10) < 0) {
         LOG_ERROR("Couldn't listen on port %d...", g_cfg.port);
+        free_and_exit(EXIT_FAILURE);
     }
+
+    if (g_cfg.daemonize) {
+        LOG_INFO("starting Caffeine server as a daemon...");
+        daemonize();
+    }
+    
     LOG_INFO("Parent listening for web requests on port %d...", g_cfg.port);
 
     LOG_INFO("Parent accepting connections from %d workers...", g_cfg.workers);
@@ -335,7 +272,7 @@ int main(int argc, char **argv) {
     close(listen_fd);
     for (int i = 0; i < g_cfg.workers; i++) close(worker_fds[i]);
     unlink(socket_path);
-    remove(PID_FILE);
+    remove(socket_path);
     free_and_exit(EXIT_SUCCESS);
     return 0;
 }

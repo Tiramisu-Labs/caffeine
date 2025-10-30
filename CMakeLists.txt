@@ -16,8 +16,10 @@ add_executable(
     src/worker.c
     src/daemon.c
     src/log.c
+    src/caffeine_cfg.c
     src/caffeine_sig.c
     src/caffeine_utils.c
+    src/list_instances.c
     )
 
 # Define the installation rule for the executable

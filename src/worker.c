@@ -1,5 +1,6 @@
 #include <caffeine.h>
 #include <caffeine_utils.h>
+#include <caffeine_cfg.h>
 #include <log.h>
 #include <response.h>
 #include <sys/types.h>

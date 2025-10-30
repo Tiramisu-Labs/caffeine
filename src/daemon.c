@@ -39,7 +39,7 @@ void daemonize() {
     char *log_path = get_log_path();
     fd = open(log_path, O_RDWR | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
-        LOG_ERROR("coudln't open file %s: ", LOG_FILE);
+        LOG_ERROR("coudln't open file %s: ", log_path);
         exit(EXIT_FAILURE);
     }
 
@@ -59,12 +59,12 @@ void daemonize() {
     }
 
     snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
-    LOG_DEBUG("Attempting to write PID %d to PID file '%s'.", getpid(), PID_FILE);
+    LOG_DEBUG("Attempting to write PID %d to PID file '%s'.", getpid(), pid_file);
     if (write(fd, pid_str, strlen(pid_str)) < 0) {
         LOG_ERROR("write pid file: ", strerror(errno));
         
-        LOG_INFO("removing file '%s'...", PID_FILE);
-        if (remove(PID_FILE) == 0) LOG_INFO("file '%s' removed", PID_FILE);
+        LOG_INFO("removing file '%s'...", pid_file);
+        if (remove(pid_file) == 0) LOG_INFO("file '%s' removed", pid_file);
         else LOG_ERROR("error: unable to delete the file");    
 
         close(fd);
