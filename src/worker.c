@@ -50,12 +50,66 @@ static char* trim_whitespace(char *str) {
     return str;
 }
 
+static void setup_cgi_environment(char *header_buffer, char *end_of_headers, char *query_params, char *method, int *content_length)
+{
+    char content_type_val[256] = {0}; 
+
+    char *current_line = strchr(header_buffer, '\n');
+    if (current_line) current_line++;
+        
+    while (current_line && current_line < end_of_headers) {
+        char *eol = strstr(current_line, "\r\n");
+        if (!eol) break;
+
+        *eol = '\0'; 
+        char *separator = strchr(current_line, ':');
+
+        if (separator) {
+            *separator = '\0'; 
+            
+            char *key = trim_whitespace(current_line);
+            char *value = trim_whitespace(separator + 1);
+
+            if (strcasecmp(key, "Content-Length") == 0) {
+                *content_length = atoi(value);
+            } else if (strcasecmp(key, "Content-Type") == 0) {
+                strncpy(content_type_val, value, sizeof(content_type_val) - 1);
+                content_type_val[sizeof(content_type_val) - 1] = '\0';
+            }
+        }
+
+        current_line = eol + 2;
+    }
+    
+    char content_length_str[16];
+    snprintf(content_length_str, sizeof(content_length_str), "%d", *content_length);
+    
+    setenv("REQUEST_METHOD", method, 1);
+    setenv("CONTENT_LENGTH", content_length_str, 1);
+    
+    if (strlen(content_type_val) > 0) {
+        setenv("CONTENT_TYPE", content_type_val, 1);
+    }
+    
+    if (query_params) {
+        int query_len = 0;
+        while (query_params[query_len] != ' ') query_params++;
+        if (query_len > 0) {
+            char store_char = query_params[query_len];
+            query_params[query_len] = 0;
+            setenv("QUERY_STRING", query_params + 1, 1);
+            query_params[query_len] = store_char;
+        }
+    }
+}
+
 
 void handle_request(int client_fd) {
     char header_buffer[4096];
     ssize_t bytes_read = 0;
     ssize_t total_bytes_read = 0;
     char *end_of_headers;
+    int content_length = 0;
     
     LOG_DEBUG("Handler (PID %d): Starting request for FD %d.", getpid(), client_fd);
     
@@ -80,7 +134,8 @@ void handle_request(int client_fd) {
     LOG_DEBUG("Handler (PID %d): Headers read and terminated.", getpid());
     
     char method[16];
-    char handler_name[256];
+    char handler_name[64];
+    char full_handler[512];
 
     char *path_start = strchr(header_buffer, '/');
     if (!path_start || path_start == header_buffer + 1) {
@@ -95,7 +150,6 @@ void handle_request(int client_fd) {
         return;
     }
     
-    
     char *path_end = strchr(path_start, ' ');
     if (path_end) {
         if (strstr(path_start, "..")) {
@@ -105,21 +159,29 @@ void handle_request(int client_fd) {
         }
         
         size_t path_len = path_end - path_start -1;
-        if (path_len >= sizeof(handler_name)) {
+        if (path_len >= sizeof(full_handler)) {
             write(client_fd, TOO_LONG, strlen(TOO_LONG));
             close(client_fd);
             return;
         }
         
-        strncpy(handler_name, path_start + 1, path_len);
-        handler_name[path_len] = '\0';
+        strncpy(full_handler, path_start + 1, path_len);
+        full_handler[path_len] = '\0';
     } else {
         write(client_fd, BAD_REQUEST, strlen(BAD_REQUEST));
         close(client_fd);
         return;
     }
 
-    char full_path[4096];
+    char *query_params = strchr(full_handler, '?');
+    if (query_params) {
+        char store = *query_params;
+        *query_params = 0;
+        strncpy(handler_name, full_handler, query_params - full_handler);
+        *query_params = store;
+    }
+
+    char full_path[2048];
     snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, handler_name);
     
     int stdin_pipe[2]; 
@@ -130,42 +192,6 @@ void handle_request(int client_fd) {
     }
     LOG_DEBUG("Handler (PID %d): Preparing to fork handler process for '%s'.", getpid(), full_path);
     
-    int content_length = 0;
-    char content_type_val[256] = {0}; 
-
-    char *current_line = strchr(header_buffer, '\n');
-    if (current_line) current_line++;
-        
-    while (current_line && current_line < end_of_headers) {
-        char *eol = strstr(current_line, "\r\n");
-        if (!eol) break;
-
-        *eol = '\0'; 
-        char *separator = strchr(current_line, ':');
-
-        if (separator) {
-            *separator = '\0'; 
-            
-            char *key = trim_whitespace(current_line);
-            char *value = trim_whitespace(separator + 1);
-
-            
-            if (strcasecmp(key, "Content-Length") == 0) {
-                content_length = atoi(value);
-            }
-            
-            else if (strcasecmp(key, "Content-Type") == 0) {
-                strncpy(content_type_val, value, sizeof(content_type_val) - 1);
-                content_type_val[sizeof(content_type_val) - 1] = '\0';
-            }
-        }
-
-        current_line = eol + 2;
-    }
-    
-    char content_length_str[16];
-    snprintf(content_length_str, sizeof(content_length_str), "%d", content_length);
-
     pid_t handler_pid = fork();
     if (handler_pid < 0) {
         LOG_ERROR("fork: %s", strerror(errno));
@@ -194,13 +220,9 @@ void handle_request(int client_fd) {
 
         close(stdin_pipe[0]);
         close(client_fd);
-        setenv("REQUEST_METHOD", method, 1);
-        setenv("CONTENT_LENGTH", content_length_str, 1);
-        
-        if (strlen(content_type_val) > 0) {
-            setenv("CONTENT_TYPE", content_type_val, 1);
-        }
-        
+
+        setup_cgi_environment(header_buffer, end_of_headers, query_params, method, &content_length);
+
         execlp(full_path, handler_name, NULL);
         LOG_ERROR("execlp: %s", strerror(errno));
         exit(EXIT_FAILURE);
@@ -227,7 +249,6 @@ void handle_request(int client_fd) {
     close(client_fd); 
     LOG_DEBUG("Handler (PID %d): FD %d handed off to child (PID %d). Returning to service loop.", getpid(), client_fd, handler_pid);
 }
-
 
 void exec_worker() {    
     signal(SIGCHLD, SIG_IGN); 
