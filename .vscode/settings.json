@@ -2,6 +2,8 @@
     "files.associations": {
         "wait.h": "c",
         "types.h": "c",
-        "fcntl.h": "c"
+        "fcntl.h": "c",
+        "caffeine.h": "c",
+        "stdlib.h": "c"
     }
 }

@@ -6,6 +6,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <ctype.h> 
+#include <errno.h> 
+#include <signal.h> 
 
 ssize_t write_fully(int fd, const char *buf, size_t count) {
     size_t total_written = 0;
@@ -22,6 +25,32 @@ ssize_t write_fully(int fd, const char *buf, size_t count) {
     return total_written;
 }
 
+static char* extract_token(const char *header, char terminator, char *buffer, size_t buf_size) {
+    const char *end = strchr(header, terminator);
+    if (!end || end - header >= buf_size) return NULL;
+    strncpy(buffer, header, end - header);
+    buffer[end - header] = '\0';
+    return buffer;
+}
+
+static char* trim_whitespace(char *str) {
+    if (!str) return NULL;
+    char *end;
+
+    
+    while(isspace((unsigned char)*str)) str++;
+
+    if(*str == 0) return str;
+    
+    end = str + strlen(str) - 1;
+    while(end > str && isspace((unsigned char)*end)) end--;
+    
+    *(end + 1) = 0;
+
+    return str;
+}
+
+
 void handle_request(int client_fd) {
     char header_buffer[4096];
     ssize_t bytes_read = 0;
@@ -29,7 +58,7 @@ void handle_request(int client_fd) {
     char *end_of_headers;
     
     LOG_DEBUG("Handler (PID %d): Starting request for FD %d.", getpid(), client_fd);
-    // find the headers
+    
     while (total_bytes_read < sizeof(header_buffer) - 1) {
         bytes_read = read(client_fd, header_buffer + total_bytes_read, sizeof(header_buffer) - 1 - total_bytes_read);
         if (bytes_read <= 0) {
@@ -49,54 +78,107 @@ void handle_request(int client_fd) {
         return;
     }
     LOG_DEBUG("Handler (PID %d): Headers read and terminated.", getpid());
-    char full_path[4096];
+    
+    char method[16];
     char handler_name[256];
 
     char *path_start = strchr(header_buffer, '/');
-    if (path_start) {
-        char *path_end = strchr(path_start, ' ');
-        if (path_end) {
-            if (strstr(path_start, "..")) {
-                write(client_fd, FORBIDDEN, strlen(FORBIDDEN));
-                close(client_fd);
-                return;
-            }
-            
-            size_t path_len = path_end - path_start -1;
-            if (path_len >= sizeof(handler_name)) {
-                write(client_fd, TOO_LONG, strlen(TOO_LONG));
-                close(client_fd);
-                return;
-            }
-            
-            strncpy(handler_name, path_start + 1, path_len);
-            handler_name[path_len] = '\0';
-            snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, handler_name);
-        } else {
-            write(client_fd, BAD_REQUEST, strlen(BAD_REQUEST));
+    if (!path_start || path_start == header_buffer + 1) {
+        write(client_fd, BAD_REQUEST, strlen(BAD_REQUEST));
+        close(client_fd);
+        return;
+    }
+    
+    if (!extract_token(header_buffer, ' ', method, sizeof(method))) {
+        write(client_fd, BAD_REQUEST, strlen(BAD_REQUEST));
+        close(client_fd);
+        return;
+    }
+    
+    
+    char *path_end = strchr(path_start, ' ');
+    if (path_end) {
+        if (strstr(path_start, "..")) {
+            write(client_fd, FORBIDDEN, strlen(FORBIDDEN));
             close(client_fd);
             return;
         }
+        
+        size_t path_len = path_end - path_start -1;
+        if (path_len >= sizeof(handler_name)) {
+            write(client_fd, TOO_LONG, strlen(TOO_LONG));
+            close(client_fd);
+            return;
+        }
+        
+        strncpy(handler_name, path_start + 1, path_len);
+        handler_name[path_len] = '\0';
+    } else {
+        write(client_fd, BAD_REQUEST, strlen(BAD_REQUEST));
+        close(client_fd);
+        return;
     }
 
-    int stdin_pipe[2], stdout_pipe[2];
-    if (pipe(stdin_pipe) < 0 || pipe(stdout_pipe) < 0) {
+    char full_path[4096];
+    snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, handler_name);
+    
+    int stdin_pipe[2]; 
+    if (pipe(stdin_pipe) < 0) {
         LOG_ERROR("pipe: %s", strerror(errno));
         close(client_fd);
         return;
     }
     LOG_DEBUG("Handler (PID %d): Preparing to fork handler process for '%s'.", getpid(), full_path);
+    
+    int content_length = 0;
+    char content_type_val[256] = {0}; 
+
+    char *current_line = strchr(header_buffer, '\n');
+    if (current_line) current_line++;
+        
+    while (current_line && current_line < end_of_headers) {
+        char *eol = strstr(current_line, "\r\n");
+        if (!eol) break;
+
+        *eol = '\0'; 
+        char *separator = strchr(current_line, ':');
+
+        if (separator) {
+            *separator = '\0'; 
+            
+            char *key = trim_whitespace(current_line);
+            char *value = trim_whitespace(separator + 1);
+
+            
+            if (strcasecmp(key, "Content-Length") == 0) {
+                content_length = atoi(value);
+            }
+            
+            else if (strcasecmp(key, "Content-Type") == 0) {
+                strncpy(content_type_val, value, sizeof(content_type_val) - 1);
+                content_type_val[sizeof(content_type_val) - 1] = '\0';
+            }
+        }
+
+        current_line = eol + 2;
+    }
+    
+    char content_length_str[16];
+    snprintf(content_length_str, sizeof(content_length_str), "%d", content_length);
+
     pid_t handler_pid = fork();
     if (handler_pid < 0) {
         LOG_ERROR("fork: %s", strerror(errno));
         close(client_fd);
+        close(stdin_pipe[0]);
+        close(stdin_pipe[1]);
         return;
     }
 
     if (handler_pid == 0) {
         LOG_DEBUG("Grandchild (PID %d): Executing '%s'.", getpid(), full_path);
+        
         close(stdin_pipe[1]);
-        close(stdout_pipe[0]);
 
         int dev_null = open("/dev/null", O_WRONLY);
         if (dev_null < 0) { 
@@ -108,62 +190,48 @@ void handle_request(int client_fd) {
         close(dev_null);
 
         dup2(stdin_pipe[0], STDIN_FILENO);
-        dup2(stdout_pipe[1], STDOUT_FILENO);
+        dup2(client_fd, STDOUT_FILENO); 
 
         close(stdin_pipe[0]);
-        close(stdout_pipe[1]);
+        close(client_fd);
+        setenv("REQUEST_METHOD", method, 1);
+        setenv("CONTENT_LENGTH", content_length_str, 1);
+        
+        if (strlen(content_type_val) > 0) {
+            setenv("CONTENT_TYPE", content_type_val, 1);
+        }
         
         execlp(full_path, handler_name, NULL);
         LOG_ERROR("execlp: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
-    
+
     close(stdin_pipe[0]);
-    close(stdout_pipe[1]);
+    ssize_t body_already_read = total_bytes_read - (end_of_headers - header_buffer) - 4;
+    ssize_t body_bytes_streamed = 0;
 
-    // write the headers
-    write(stdin_pipe[1], header_buffer, total_bytes_read);
-
-    // stream the rest of the body
-    int content_length = 0;
-    char* cl_header = strstr(header_buffer, "Content-Length: ");
-    if (cl_header) {
-        content_length = atoi(cl_header + strlen("Content-Length: "));
+    if (body_already_read > 0) {
+        char *body_start = end_of_headers + 4; 
+        write(stdin_pipe[1], body_start, body_already_read);
+        body_bytes_streamed += body_already_read;
     }
     
-    ssize_t body_already_read = total_bytes_read - (end_of_headers - header_buffer) - 4;
-    ssize_t body_bytes_streamed = body_already_read;
-
     while (body_bytes_streamed < content_length) {
         ssize_t chunk_size = read(client_fd, header_buffer, sizeof(header_buffer));
         if (chunk_size <= 0) break;
         write(stdin_pipe[1], header_buffer, chunk_size);
         body_bytes_streamed += chunk_size;
     }
-    close(stdin_pipe[1]);
-
-    char response_buffer[4096] = {0};
-    ssize_t response_bytes_read;
-    ssize_t bytes_written;
-    LOG_DEBUG("Handler (PID %d): Starting response stream to client.", getpid());
-    while ((response_bytes_read = read(stdout_pipe[0], response_buffer, sizeof(response_buffer))) > 0) {
-        bytes_written = write_fully(client_fd, response_buffer, response_bytes_read);
-        if (bytes_written < 0) break; 
-    }
     
-    if (strlen(response_buffer) == 0) {
-        write(client_fd, NOT_FOUND, strlen(NOT_FOUND));
-    }
-    LOG_DEBUG("Handler (PID %d): Waiting for grandchild PID %d to exit.", getpid(), handler_pid);
-    waitpid(handler_pid, NULL, 0);
-    close(stdout_pipe[0]);
-    close(client_fd);
-    LOG_DEBUG("Handler (PID %d): Request complete and FD %d closed.", getpid(), client_fd);
+    close(stdin_pipe[1]);
+    close(client_fd); 
+    LOG_DEBUG("Handler (PID %d): FD %d handed off to child (PID %d). Returning to service loop.", getpid(), client_fd, handler_pid);
 }
 
 
 void exec_worker() {    
-    // create a new socket for this worker to connect back to the parent
+    signal(SIGCHLD, SIG_IGN); 
+
     int ipc_socket = socket(AF_UNIX, SOCK_STREAM, 0);
     if (ipc_socket < 0) {
         LOG_ERROR("worker socket: %s", strerror(errno));
@@ -177,7 +245,7 @@ void exec_worker() {
     ipc_addr.sun_family = AF_UNIX;
     strncpy(ipc_addr.sun_path, get_socket_path(), sizeof(ipc_addr.sun_path) - 1);
 
-    // connect to the parent's listening socket
+    
     while (connect(ipc_socket, (struct sockaddr *)&ipc_addr, sizeof(ipc_addr)) < 0) sleep(1);
     
     LOG_INFO("Worker (PID %d) connected to parent.", getpid());
@@ -198,7 +266,9 @@ void exec_worker() {
             break;
         }
         LOG_INFO("Worker (PID %d) received client FD %d. Handling request...", getpid(), client_fd);
+
         handle_request(client_fd);
+        
         LOG_DEBUG("Worker (PID %d) finished handling request for FD %d.", getpid(), client_fd);
 
         LOG_DEBUG("Worker (PID %d) signaling parent ready.", getpid());

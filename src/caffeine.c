@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <pwd.h>
 #include <string.h>
+#include <signal.h>
+#include <sys/types.h>
 
 void display_help() {
     printf("Usage: %s [OPTIONS]\n", "caffeine");
@@ -24,12 +26,6 @@ void display_help() {
     printf("  --stop <name>             Stop the corresponding server and all the workers\n");
     printf("  --instance-list           List all running instances\n");
 }
-
-#include <signal.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <log.h>
 
 void display_log_file() {
     int fd = open(get_log_path(), O_RDONLY);
