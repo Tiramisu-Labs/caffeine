@@ -110,13 +110,13 @@ int recv_fd(int socket) {
 
 int main(int argc, char **argv) {
     init_config();
-    set_log_level(g_cfg.log_level);
     if (sig_init() < 0) {
         LOG_ERROR("failed to init signals: %s", strerror(errno));
     }
     if (parse_arguments(argc, argv) < 0) {
         free_and_exit(EXIT_FAILURE);
     }
+    set_log_level(g_cfg.log_level);
 
     if (g_cfg.show_log) {
         display_log_file();

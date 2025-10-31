@@ -179,10 +179,10 @@ void handle_request(int client_fd) {
         *query_params = 0;
         strncpy(handler_name, full_handler, query_params - full_handler);
         *query_params = store;
+    } else {
+        strncpy(handler_name, full_handler, strlen(full_handler));
     }
-
-    char full_path[2048];
-    snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, handler_name);
+    
     
     int stdin_pipe[2]; 
     if (pipe(stdin_pipe) < 0) {
@@ -190,7 +190,36 @@ void handle_request(int client_fd) {
         close(client_fd);
         return;
     }
+
+    char full_path[2048];
+    snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, handler_name);
     LOG_DEBUG("Handler (PID %d): Preparing to fork handler process for '%s'.", getpid(), full_path);
+    const char *interpreter = NULL;
+    const char *handler_exec_path = full_path;
+
+    size_t name_len = strlen(handler_name);
+    
+    if (name_len > 3) {
+        if (strcmp(handler_name + name_len - 3, ".py") == 0) {
+            interpreter = "python3";
+            handler_exec_path = "python3";
+        } else if (strcmp(handler_name + name_len - 3, ".js") == 0) {
+            interpreter = "node";
+            handler_exec_path = "node";
+        } else if (strcmp(handler_name + name_len - 3, ".sh") == 0) {
+            interpreter = "bash";
+            handler_exec_path = "bash";
+        } else if (strcmp(handler_name + name_len - 3, ".pl") == 0) {
+            interpreter = "perl";
+            handler_exec_path = "perl";
+        } else if (strcmp(handler_name + name_len - 3, ".rb") == 0) {
+            interpreter = "ruby";
+            handler_exec_path = "ruby";
+        } else if (name_len > 4 && strcmp(handler_name + name_len - 4, ".php") == 0) {
+            interpreter = "php";
+            handler_exec_path = "php";
+        }
+    }
     
     pid_t handler_pid = fork();
     if (handler_pid < 0) {
@@ -203,7 +232,7 @@ void handle_request(int client_fd) {
 
     if (handler_pid == 0) {
         LOG_DEBUG("Grandchild (PID %d): Executing '%s'.", getpid(), full_path);
-        
+        LOG_DEBUG("interpreter %s", interpreter);
         close(stdin_pipe[1]);
 
         int dev_null = open("/dev/null", O_WRONLY);
@@ -223,7 +252,12 @@ void handle_request(int client_fd) {
 
         setup_cgi_environment(header_buffer, end_of_headers, query_params, method, &content_length);
 
-        execlp(full_path, handler_name, NULL);
+        if (interpreter) {
+            execlp(handler_exec_path, handler_exec_path, full_path, NULL);
+        } else {
+            // Binary execution: execlp(binary_path, handler_name, NULL)
+            execlp(handler_exec_path, handler_name, NULL);
+        }
         LOG_ERROR("execlp: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
