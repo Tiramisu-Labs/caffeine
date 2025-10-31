@@ -1,3 +1,5 @@
+#define _GNU_SOURCE         /* See feature_test_macros(7) */
+#define _FILE_OFFSET_BITS 64
 #include <caffeine.h>
 #include <caffeine_utils.h>
 #include <caffeine_cfg.h>
@@ -198,27 +200,15 @@ void handle_request(int client_fd) {
     size_t name_len = strlen(handler_name);
     
     if (name_len > 3) {
-        if (strcmp(handler_name + name_len - 3, ".py") == 0) {
-            interpreter = "python3";
-            handler_exec_path = "python3";
-        } else if (strcmp(handler_name + name_len - 3, ".js") == 0) {
-            interpreter = "node";
-            handler_exec_path = "node";
-        } else if (strcmp(handler_name + name_len - 3, ".sh") == 0) {
-            interpreter = "bash";
-            handler_exec_path = "bash";
-        } else if (strcmp(handler_name + name_len - 3, ".pl") == 0) {
-            interpreter = "perl";
-            handler_exec_path = "perl";
-        } else if (strcmp(handler_name + name_len - 3, ".rb") == 0) {
-            interpreter = "ruby";
-            handler_exec_path = "ruby";
-        } else if (name_len > 4 && strcmp(handler_name + name_len - 4, ".php") == 0) {
-            interpreter = "php";
-            handler_exec_path = "php";
-        }
+        if (strcmp(handler_name + name_len - 3, ".py") == 0) interpreter = "python3";
+        else if (strcmp(handler_name + name_len - 3, ".js") == 0) interpreter = "node";
+        else if (strcmp(handler_name + name_len - 3, ".sh") == 0) interpreter = "bash";
+        else if (strcmp(handler_name + name_len - 3, ".pl") == 0) interpreter = "perl";
+        else if (strcmp(handler_name + name_len - 3, ".rb") == 0) interpreter = "ruby";
+        else if (name_len > 4 && strcmp(handler_name + name_len - 4, ".php") == 0) interpreter = "php";
     }
-    
+    if (interpreter) handler_exec_path = interpreter;
+
     pid_t handler_pid = fork();
     if (handler_pid < 0) {
         LOG_ERROR("fork: %s", strerror(errno));
@@ -230,7 +220,6 @@ void handle_request(int client_fd) {
 
     if (handler_pid == 0) {
         LOG_DEBUG("Grandchild (PID %d): Executing '%s'.", getpid(), full_path);
-        LOG_DEBUG("interpreter %s", interpreter);
         close(stdin_pipe[1]);
 
         int dev_null = open("/dev/null", O_WRONLY);
@@ -270,11 +259,36 @@ void handle_request(int client_fd) {
         body_bytes_streamed += body_already_read;
     }
     
+    // ssize_t remaining = (ssize_t)(content_length - body_bytes_streamed);
+
+    // while (remaining > 0) {
+    //     ssize_t chunk_size = splice(
+    //         client_fd, NULL,
+    //         stdin_pipe[1], NULL,
+    //         (size_t)remaining, // Ensure count is positive
+    //         SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE
+    //     );
+
+    //     if (chunk_size > 0) {
+    //         body_bytes_streamed += chunk_size;
+    //         remaining -= chunk_size;
+    //     } else if (chunk_size == 0) {
+    //         usleep(100); 
+    //     } else {
+    //         if (errno == EINTR) continue;
+    //         if (errno == EAGAIN || errno == EWOULDBLOCK) {
+    //             usleep(100); 
+    //             continue;
+    //         }
+    //         LOG_ERROR("splice failed: %s", strerror(errno));
+    //         break; 
+    //     }
+    // }
+    
     while (body_bytes_streamed < content_length) {
         ssize_t chunk_size = read(client_fd, header_buffer, sizeof(header_buffer));
         if (chunk_size <= 0) break;
         write(stdin_pipe[1], header_buffer, chunk_size);
-        body_bytes_streamed += chunk_size;
     }
     
     close(stdin_pipe[1]);
