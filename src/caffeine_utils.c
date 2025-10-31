@@ -4,6 +4,7 @@
 #include <caffeine.h>
 #include <sys/stat.h>
 #include <pwd.h>
+#include <ctype.h>
 
 void free_and_exit(int status) {
     if (g_cfg.instance_name) free(g_cfg.instance_name);
@@ -13,6 +14,22 @@ void free_and_exit(int status) {
     if (g_cfg.log_path) free(g_cfg.log_path);
     if (g_cfg.pid_path) free(g_cfg.pid_path);
     exit(status);
+}
+
+char* trim_whitespace(char *str) {
+    if (!str) return NULL;
+    char *end;
+
+    while(isspace((unsigned char)*str)) str++;
+
+    if(*str == 0) return str;
+
+    end = str + strlen(str) - 1;
+    while(end > str && isspace((unsigned char)*end)) end--;
+
+    *(end + 1) = 0;
+
+    return str;
 }
 
 char* get_socket_path() {

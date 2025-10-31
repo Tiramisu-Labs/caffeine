@@ -12,20 +12,10 @@
 #include <log.h>
 
 static int is_pid_running(pid_t pid) {
-    // kill(pid, 0) checks if a process exists and permissions allow sending a signal.
-    // Since 0 is passed, no signal is sent. If the process is found, 0 is returned.
-    if (pid <= 0) {
-        return 0;
-    }
-    if (kill(pid, 0) == 0) {
-        return 1; // Process exists
-    }
-    // If kill returns -1, it failed. 
-    // ESRCH means the process is not found (and thus, not running).
-    if (errno == ESRCH) {
-        return 0; 
-    }
-    // EPERM means we don't have permission, but the process likely exists.
+    if (pid <= 0) return 0;
+    if (kill(pid, 0) == 0) return 1;
+    if (errno == ESRCH) return 0; 
+    
     return 1; 
 }
 
@@ -64,28 +54,23 @@ void list_running_instances() {
     printf("--- Running Caffeine Instances ---\n");
 
     while ((entry = readdir(dir)) != NULL) {
-        // Look for files matching the pattern: PID_FILE_PREFIX (e.g., caffeine_)
         if (strstr(entry->d_name, PID_FILE_PREFIX) == entry->d_name &&
             strstr(entry->d_name, PID_FILE_SUFFIX) != NULL) {
 
-            // Calculate the length of the instance name string
             size_t name_start_len = strlen(PID_FILE_PREFIX);
             size_t name_end_len = strlen(PID_FILE_SUFFIX);
             size_t total_len = strlen(entry->d_name);
             size_t name_len = total_len - name_start_len - name_end_len;
             
-            // Allocate space for the extracted instance name
             char *instance_name = (char *)malloc(name_len + 1);
             if (!instance_name) {
                 fprintf(stderr, "ERROR: Memory allocation failed.\n");
                 break;
             }
             
-            // Copy the instance name part
             strncpy(instance_name, entry->d_name + name_start_len, name_len);
-            instance_name[name_len] = '\0'; // Null-terminate
+            instance_name[name_len] = '\0';
 
-            // Construct full path to read PID
             char full_path[512];
             snprintf(full_path, sizeof(full_path), "%s/%s", PID_PATH, entry->d_name);
 
@@ -95,19 +80,13 @@ void list_running_instances() {
                 printf("  [RUNNING] Name: %-20s PID: %d\n", instance_name, pid);
                 found_any = 1;
             } else {
-                // Cleanup stale PID file if the process is confirmed dead
-                LOG_DEBUG("Found stale PID file for instance '%s'. Removing: %s", 
-                           instance_name, full_path);
+                LOG_DEBUG("Found stale PID file for instance '%s'. Removing: %s", instance_name, full_path);
                 remove(full_path);
             }
-
             free(instance_name);
         }
     }
 
-    if (!found_any) {
-        printf("No active Caffeine instances found.\n");
-    }
-
+    if (!found_any) printf("No active Caffeine instances found.\n");
     closedir(dir);
 }

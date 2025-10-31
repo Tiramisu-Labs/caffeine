@@ -1,11 +1,13 @@
 #include <caffeine_cfg.h>
 #include <caffeine_utils.h>
+#include <caffeine_sig.h>
 #include <log.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <fcntl.h>
 
 #define MAX_LINE_LENGTH 256
 
@@ -32,27 +34,39 @@ void print_usage(const char *progname) {
     fprintf(stderr, "\n");
 }
 
+static void reset_log_file() {
+    int fd = open(get_log_path(), O_WRONLY | O_TRUNC);
+    if (fd < 0) {
+        LOG_ERROR("Error: Could not open log file at %s: %s\n", get_log_path(), strerror(errno));
+        return;
+    }
+    close(fd);
+}
+
+static void display_log_file() {
+    int fd = open(get_log_path(), O_RDONLY);
+    if (fd < 0) {
+        LOG_ERROR("Error: Could not open log file at %s: %s\n", get_log_path(), strerror(errno));
+        return;
+    }
+
+    char buffer[4096];
+    ssize_t bytes_read;
+
+    while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
+        if (write(STDOUT_FILENO, buffer, bytes_read) < 0) {
+            LOG_ERROR("Error writing to stdout: %s", strerror(errno));
+            break;
+        }
+    }
+    close(fd);
+}
+
 void init_config()
 {
     memset(&g_cfg, 0, sizeof(config_t));
     g_cfg.port = DEFAULT_PORT;
     g_cfg.workers = DEFAULT_WORKERS;
-}
-
-static char* trim_whitespace(char *str) {
-    if (!str) return NULL;
-    char *end;
-
-    while(isspace((unsigned char)*str)) str++;
-
-    if(*str == 0) return str;
-
-    end = str + strlen(str) - 1;
-    while(end > str && isspace((unsigned char)*end)) end--;
-
-    *(end + 1) = 0;
-
-    return str;
 }
 
 static void parse_config_line(char *line) {
@@ -120,13 +134,14 @@ int parse_arguments(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         char *arg = argv[i];
 
-        #define CHECK_ARG(option) \
-            if (i + 1 >= argc) { \
-                LOG_ERROR("option %s requires an argument.", option); \
-                print_usage(argv[0]); \
-                return -1; \
-            } \
+        #define CHECK_ARG(option)                                       \
+            if (i + 1 >= argc) {                                        \
+                LOG_ERROR("option %s requires an argument.", option);   \
+                print_usage(argv[0]);                                   \
+                return -1;                                              \
+            }                                                           \
             i++;
+            // end macro definition
 
         if (strcmp(arg, "-n") == 0 || strcmp(arg, "--name") == 0) {
             CHECK_ARG(arg);
@@ -181,5 +196,10 @@ int parse_arguments(int argc, char **argv) {
     #undef CHECK_ARG
     if (!g_cfg.exec_path) g_cfg.exec_path = get_default_path();
     if (!g_cfg.log_level) g_cfg.log_level = strdup(DEFAULT_LOG_LEVEL);
+    if (g_cfg.show_log) { display_log_file(); free_and_exit(EXIT_SUCCESS); }
+    if (g_cfg.reset_logs) { reset_log_file(); free_and_exit(EXIT_SUCCESS); }
+    if (g_cfg.stop_instance) { stop_server(); free_and_exit(EXIT_SUCCESS); }
+    if (g_cfg.list_instances) { list_running_instances(); free_and_exit(EXIT_SUCCESS);}
+    set_log_level(g_cfg.log_level);
     return 0;
 }

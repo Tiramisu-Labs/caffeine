@@ -33,23 +33,6 @@ static char* extract_token(const char *header, char terminator, char *buffer, si
     return buffer;
 }
 
-static char* trim_whitespace(char *str) {
-    if (!str) return NULL;
-    char *end;
-
-    
-    while(isspace((unsigned char)*str)) str++;
-
-    if(*str == 0) return str;
-    
-    end = str + strlen(str) - 1;
-    while(end > str && isspace((unsigned char)*end)) end--;
-    
-    *(end + 1) = 0;
-
-    return str;
-}
-
 static void setup_cgi_environment(char *header_buffer, char *end_of_headers, char *query_params, char *method, int *content_length)
 {
     char content_type_val[256] = {0}; 
@@ -105,7 +88,7 @@ static void setup_cgi_environment(char *header_buffer, char *end_of_headers, cha
 
 
 void handle_request(int client_fd) {
-    char header_buffer[4096];
+    char header_buffer[8192];
     ssize_t bytes_read = 0;
     ssize_t total_bytes_read = 0;
     char *end_of_headers;
@@ -133,9 +116,9 @@ void handle_request(int client_fd) {
     }
     LOG_DEBUG("Handler (PID %d): Headers read and terminated.", getpid());
     
-    char method[16];
-    char handler_name[64];
-    char full_handler[512];
+    char method[16] = {0};
+    char handler_name[64] = {0};
+    char full_handler[512] = {0};
 
     char *path_start = strchr(header_buffer, '/');
     if (!path_start || path_start == header_buffer + 1) {
@@ -182,7 +165,24 @@ void handle_request(int client_fd) {
     } else {
         strncpy(handler_name, full_handler, strlen(full_handler));
     }
+
+    char full_path[2048];
+    snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, handler_name);
     
+    struct stat st;
+    if (stat(full_path, &st) == -1) {
+        if (errno == ENOENT) {
+            LOG_WARN("File not found: %s", full_path);
+            write(client_fd, NOT_FOUND, strlen(NOT_FOUND));
+            close(client_fd);
+            return;
+        } else {
+            LOG_ERROR("stat failed for %s: %s", full_path, strerror(errno));
+            write(client_fd, INTERNAL_ERROR, strlen(INTERNAL_ERROR));
+            close(client_fd);
+            return;
+        }
+    }
     
     int stdin_pipe[2]; 
     if (pipe(stdin_pipe) < 0) {
@@ -191,11 +191,9 @@ void handle_request(int client_fd) {
         return;
     }
 
-    char full_path[2048];
-    snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, handler_name);
     LOG_DEBUG("Handler (PID %d): Preparing to fork handler process for '%s'.", getpid(), full_path);
-    const char *interpreter = NULL;
-    const char *handler_exec_path = full_path;
+    char *interpreter = NULL;
+    char *handler_exec_path = full_path;
 
     size_t name_len = strlen(handler_name);
     

@@ -46,4 +46,15 @@
     "    </body>\n"                         \
     "</html>\n"                             \
 
+#define INTERNAL_ERROR  \
+    "HTTP/1.1 500 Internal Server Error\r\n"\
+    "Content-Type: text/html\r\n"           \
+    "Content-Length: 81\r\n"                \
+    "\r\n"                                  \
+    "<html>\n"                              \
+    "    <body>\n"                          \
+    "        <h1>500 Internal Server Error</h1>\n"      \
+    "    </body>\n"                         \
+    "</html>\n"                             \
+
 #endif

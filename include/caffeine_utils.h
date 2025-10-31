@@ -4,6 +4,7 @@
 #include <caffeine.h>
 
 void init_config();
+char* trim_whitespace(char *str);
 void free_and_exit(int status);
 char* get_socket_path();
 char* get_pid_path();
