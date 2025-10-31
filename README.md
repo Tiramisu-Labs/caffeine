@@ -127,17 +127,24 @@ You'll need a $\\text{C}$ compiler (like gcc or clang) and a Unix-like operating
 * Make build.sh executable:  
   chmod \+x build.sh
 
-* Launch the script and follow the instructions:  
+* Launch the script and follow the instructions:
+```
   ./build.sh  
   ...  
   cd build  
   make install
-
+```
 * By default, the script will install the binary in $HOME/.local/bin. If you want to specify a different path, simply pass it to the script:  
+```
   ./build.sh /usr/local
+```
 
 * Now you can run the server using:  
+```
   caffeine
+```
 
 * To run it in the foreground for testing:  
+```
   caffeine \--port 8080 \--workers 4  
+```
