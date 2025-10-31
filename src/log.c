@@ -53,7 +53,7 @@ void server_log(log_level_t level, const char *fmt, ...) {
     }
 
     char time_buf[24];
-    char log_message[1024] = {0};
+    char log_message[4096] = {0};
     
     time_t timer;
     struct tm *tm_info;
@@ -66,7 +66,7 @@ void server_log(log_level_t level, const char *fmt, ...) {
     vsnprintf(log_message, sizeof(log_message), fmt, args);
     va_end(args);
 
-    char final_output[1024 + 64];
+    char final_output[4096 + 64];
     snprintf(final_output, sizeof(final_output), "%s [%s] [PID %d] %s\n",
              time_buf, log_level_to_str(level), getpid(), log_message);
     

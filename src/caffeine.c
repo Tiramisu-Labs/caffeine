@@ -52,6 +52,11 @@ int recv_fd(int socket) {
     msg.msg_controllen = sizeof(control_buffer);
 
     if (recvmsg(socket, &msg, 0) < 0) {
+        if (errno == ECONNRESET) {
+            LOG_DEBUG("recvmsg: Parent closed IPC socket (ECONNRESET). Signaling worker exit.");
+            return -1; 
+        }
+        
         LOG_ERROR("recvmsg: %s", strerror(errno));
         return -1;
     }

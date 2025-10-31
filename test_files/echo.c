@@ -10,6 +10,7 @@ void send_response(const char *body, const char *status_code, const char *status
     printf("Content-Type: text/plain\r\n");
     printf("Content-Length: %d\r\n", content_length);
     printf("Server: Caffeine-Test-Suite\r\n");
+    printf("Connection: close\r\n");
     printf("\r\n");
     printf("%s", body);
 
@@ -40,8 +41,7 @@ int main(int argc, char *argv[]) {
             size_t response_len = 100 + bytes_read;
             char *response_body = (char *)malloc(response_len);
             snprintf(response_body, response_len, 
-                    "POST request processed. Received body (%d bytes): %s", 
-                    bytes_read, body_buffer);
+                    "echo: %s", body_buffer);
             
             send_response(response_body, "200", "OK");
             
