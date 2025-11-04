@@ -2,6 +2,7 @@
 #include <caffeine_sig.h>
 #include <caffeine_utils.h>
 #include <caffeine_cfg.h>
+#include <deploy.h>
 #include <log.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -77,6 +78,16 @@ int main(int argc, char **argv) {
         free_and_exit(EXIT_FAILURE);
     }
     
+    if (g_cfg.deploy) {
+        int i = 0;
+        while (g_cfg.deploy_start[i]) {
+            if (is_flag( g_cfg.deploy_start[i])) break;
+            handle_deploy( g_cfg.deploy_start[i]);
+            i++;
+        }
+        free_and_exit(EXIT_SUCCESS);
+    }
+
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
         LOG_ERROR("socket: %s", strerror(errno));

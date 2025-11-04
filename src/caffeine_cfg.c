@@ -8,6 +8,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <fcntl.h>
+#include <deploy.h>
 
 #define MAX_LINE_LENGTH 256
 
@@ -26,6 +27,11 @@ void print_usage(const char *progname) {
     fprintf(stderr, "  -p, --port <port>      Set the listening port (default: %d).\n", DEFAULT_PORT);
     fprintf(stderr, "  -w, --workers <num>    Set the number of worker processes (default: %d).\n", DEFAULT_WORKERS);
     fprintf(stderr, "  --path <path>          Set the base path for executable handlers (default: %s).\n", EXEC_PATH);
+    fprintf(stderr, "\n--- Content Deployment ---\n");
+    fprintf(stderr, "  --deploy <path>        Upload a file or directory to the server's execution path.\n");
+    fprintf(stderr, "                         If <path> is a directory, its contents are copied recursively\n");
+    fprintf(stderr, "                         to a new subdirectory within the execution path.\n");
+    fprintf(stderr, "                         --path can be specified to change deploy directory.\n");
     fprintf(stderr, "\n--- Logging & Utilities ---\n");
     fprintf(stderr, "  -l, --log              Display the log file for the instance specified by -n.\n");
     fprintf(stderr, "  --log-level <level>    Set logging verbosity (DEBUG, INFO, WARN, ERROR) (default: %s).\n", DEFAULT_LOG_LEVEL);
@@ -131,6 +137,10 @@ static int read_config_file(const char *path) {
     return 0;
 }
 
+int is_flag(char *s) {
+    return (s[0] == '-');
+}
+
 int parse_arguments(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         char *arg = argv[i];
@@ -169,6 +179,10 @@ int parse_arguments(int argc, char **argv) {
             }
         } else if (strcmp(arg, "-D") == 0 || strcmp(arg, "--daemon") == 0) {
             g_cfg.daemonize = 1;
+        } else if (strcmp(arg, "-d") == 0 || strcmp(arg, "--deploy") == 0) {
+            CHECK_ARG(argv[i]);
+            g_cfg.deploy_start = argv + i;
+            g_cfg.deploy = 1;
         } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--stop") == 0) {
             g_cfg.stop_instance = 1;
         } else if (strcmp(arg, "-L") == 0 || strcmp(arg, "--list-instances") == 0) {
