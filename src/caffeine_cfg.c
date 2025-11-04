@@ -43,7 +43,7 @@ void print_usage(const char *progname) {
 static void reset_log_file() {
     int fd = open(get_log_path(), O_WRONLY | O_TRUNC);
     if (fd < 0) {
-        fprintf(stderr, "caffeine: error: Could not open log file at %s: %s\n", get_log_path(), strerror(errno));
+        fprintf(stderr, "%scaffeine: error: Could not open log file at %s: %s%s\n", COLOR_BRIGHT_RED, get_log_path(), strerror(errno), COLOR_RESET);
         return;
     }
     close(fd);
@@ -52,7 +52,7 @@ static void reset_log_file() {
 static void display_log_file() {
     int fd = open(get_log_path(), O_RDONLY);
     if (fd < 0) {
-        fprintf(stderr, "caffeine: error: Could not open log file at %s: %s\n", get_log_path(), strerror(errno));
+        fprintf(stderr, "%scaffeine: error: Could not open log file at %s: %s%s\n", COLOR_BRIGHT_RED, get_log_path(), strerror(errno), COLOR_RESET);
         return;
     }
 
@@ -61,7 +61,7 @@ static void display_log_file() {
 
     while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
         if (write(STDOUT_FILENO, buffer, bytes_read) < 0) {
-            fprintf(stderr, "caffeine: error writing to stdout: %s\n", strerror(errno));
+            fprintf(stderr, "%scaffeine: error: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
             break;
         }
     }
@@ -86,7 +86,7 @@ static void parse_config_line(char *line, int line_number) {
 
     value = strchr(line, '=');
     if (value == NULL) {
-        fprintf(stderr, "caffeine: config file error: line: %d. Skipping malformed line (no '=')\n", line_number);
+        fprintf(stderr, "%scaffeine: error: config file line: %d. Skipping malformed line (no '=')%s\n", COLOR_BRIGHT_RED, line_number, COLOR_RESET);
         return;
     }
 
@@ -97,18 +97,18 @@ static void parse_config_line(char *line, int line_number) {
 
     if (strcmp(key, "port") == 0) {
         g_cfg.port = atoi(value);
-        LOG_DEBUG("Config read: port = %d", g_cfg.port);
+        fprintf(stdout, "caffeine: config read: port = %d\n", g_cfg.port);
     } else if (strcmp(key, "workers") == 0) {
         g_cfg.workers = atoi(value);
-        LOG_DEBUG("Config read: workers = %d", g_cfg.workers);
+        fprintf(stdout, "caffeine: config read: workers = %d\n", g_cfg.workers);
     } else if (strcmp(key, "log_level") == 0) {
         if (g_cfg.log_level) free(g_cfg.log_level);
         g_cfg.log_level = strdup(value);
-        LOG_DEBUG("Config read: log_level = %s", g_cfg.log_level);
+        fprintf(stdout, "caffeine: config read: log_level = %s\n", g_cfg.log_level);
     } else if (strcmp(key, "base_path") == 0) {
         if (g_cfg.exec_path) free(g_cfg.exec_path);
         g_cfg.exec_path = strdup(value);
-        LOG_DEBUG("Config read: exec_path = %s", g_cfg.exec_path);
+        fprintf(stdout, "caffeine: config read: exec_path = %s\n", g_cfg.exec_path);
     } 
 }
 
@@ -117,13 +117,13 @@ static int read_config_file(const char *path) {
     char line[MAX_LINE_LENGTH];
     
     if (!path) {
-        fprintf(stderr, "caffeine: error: no path provided.\n");
+        fprintf(stderr, "%scaffeine: error: no path provided%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
         return -1;
     }
 
     file = fopen(path, "r");
     if (file == NULL) {
-        fprintf(stderr, "caffeine: error: failed to open configuration file at: %s. Check path and permissions.\n", path);
+        fprintf(stderr, "%scaffeine: error: failed to open configuration file at: %s. Check path and permissions%s\n", COLOR_BRIGHT_RED, path, COLOR_RESET);
         return -1;
     }
     
@@ -146,7 +146,9 @@ int parse_arguments(int argc, char **argv) {
 
         #define CHECK_ARG(option)                                       \
             if (i + 1 >= argc) {                                        \
-                fprintf(stderr, "caffeine: option %s requires an argument\n", option);   \
+                fprintf(stderr,                                         \
+                    "%scaffeine: option %s requires an argument%s\n",   \
+                    COLOR_BRIGHT_RED, option, COLOR_RESET);             \
                 print_usage(argv[0]);                                   \
                 return -1;                                              \
             }                                                           \
@@ -173,7 +175,7 @@ int parse_arguments(int argc, char **argv) {
         } else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--config") == 0) {
             CHECK_ARG(argv[i]);
             if (read_config_file(arg) < 0) {
-                fprintf(stderr, "an error occured while trying to read the configuration file\n");
+                fprintf(stderr, "%scaffeine: error: configuration file%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
                 return -1;
             }
         } else if (strcmp(arg, "-D") == 0 || strcmp(arg, "--daemon") == 0) {
@@ -194,7 +196,7 @@ int parse_arguments(int argc, char **argv) {
             print_usage(argv[0]);
             return -1;
         } else {
-            fprintf(stderr, "unknown option: %s\n", arg);
+            fprintf(stderr, "%scaffeine: error: unknown option: %s%s\n", COLOR_BRIGHT_RED, arg, COLOR_RESET);
             print_usage(argv[0]);
             return -1;
         }
@@ -203,7 +205,7 @@ int parse_arguments(int argc, char **argv) {
     if ((g_cfg.daemonize || g_cfg.stop_instance || g_cfg.show_log || g_cfg.reset_logs) && 
         (g_cfg.instance_name == NULL || strcmp(g_cfg.instance_name, "caffeine_default") == 0)) 
     {
-        fprintf(stderr, "The commands -D, -s, -l, and --reset-logs require a unique instance name (-n <name>)\n");
+        fprintf(stderr, "%scaffeine: error: commands -D, -s, -l, and --reset-logs require a unique instance name (-n <name>)%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
         print_usage(argv[0]);
         return -1;
     }
