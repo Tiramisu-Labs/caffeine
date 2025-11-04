@@ -70,9 +70,16 @@ void server_log(log_level_t level, const char *fmt, ...) {
     snprintf(final_output, sizeof(final_output), "%s [%s] [PID %d] %s\n",
              time_buf, log_level_to_str(level), getpid(), log_message);
     
+    ssize_t len = strlen(final_output);
     if (level >= WARN) {
-        fprintf(stderr, "%s%s%s", level == ERROR ? COLOR_BRIGHT_RED : COLOR_BRIGHT_YELLOW, final_output, COLOR_RESET);
+        const char *color = (level == ERROR) ? COLOR_BRIGHT_RED : COLOR_BRIGHT_YELLOW;
+        write(STDERR_FILENO, color, strlen(color));
+        write(STDERR_FILENO, final_output, len);
+        write(STDERR_FILENO, COLOR_RESET, strlen(COLOR_RESET));
     } else {
-        fprintf(stdout, "%s%s%s", level == DEBUG ? COLOR_CYAN : COLOR_GREEN, final_output, COLOR_RESET);
+        const char *color = (level == DEBUG) ? COLOR_CYAN : COLOR_GREEN;
+        write(STDERR_FILENO, color, strlen(color));
+        write(STDERR_FILENO, final_output, len);
+        write(STDERR_FILENO, COLOR_RESET, strlen(COLOR_RESET));
     }
 }

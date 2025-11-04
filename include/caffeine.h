@@ -25,9 +25,23 @@
 #define PID_FILE_PREFIX "caffeine_"
 #define PID_FILE_SUFFIX ".pid"
 
+typedef struct headers_s {
+    char    method[16];
+    char    path[512];
+    char    query[512];
+    char    protocol[16];
+    char    headers[8192];
+    char    handler_name[32];
+    char    content_type[256];
+    char    *headers_end;
+    size_t  content_length;
+    size_t  bytes_read;
+    uint8_t is_query;
+}   headers_t;
+
 int send_fd(int socket, int fd_to_send);
 int recv_fd(int socket);
-void exec_worker();
+void exec_worker(int listen_fd);
 void daemonize();
 
 #endif

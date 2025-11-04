@@ -20,6 +20,7 @@ add_executable(
     src/caffeine_sig.c
     src/caffeine_utils.c
     src/list_instances.c
+    src/headers.c
     )
 
 # Define the installation rule for the executable

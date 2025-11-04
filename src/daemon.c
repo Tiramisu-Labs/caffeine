@@ -14,7 +14,6 @@ void daemonize() {
     char pid_str[16];
 
     pid = fork();
-    LOG_DEBUG("Child process (PID %d) continuing daemonization.", getpid());
     if (pid < 0) {
         LOG_ERROR("fork: %s", strerror(errno));
         exit(EXIT_FAILURE);
@@ -50,13 +49,15 @@ void daemonize() {
         exit(EXIT_FAILURE);
     }
 
+    fflush(stdout);
+    fflush(stderr);
+
     if (fd > 2) close(fd);
 
     char *pid_file = get_pid_path();
     fd = open(pid_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         LOG_ERROR("open pid file: ", strerror(errno));
-        // Daemon should exit if it can't record its PID
         exit(EXIT_FAILURE); 
     }
 

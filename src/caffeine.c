@@ -119,56 +119,48 @@ void server_loop(int listen_fd, int *worker_fds) {
 }
 
 int main(int argc, char **argv) {
+    // 1. INITIAL SETUP
     init_config();
+
+    // Store arguments for later management commands
+    g_cfg.argc = argc;
+    g_cfg.argv = argv;
+
     if (sig_init() < 0) {
-        LOG_ERROR("failed to init signals: %s", strerror(errno));
+        LOG_ERROR("Failed to initialize signals: %s", strerror(errno));
     }
+    
     if (parse_arguments(argc, argv) < 0) {
         free_and_exit(EXIT_FAILURE);
     }
-
-    unlink(get_socket_path());
     
-    int ipc_socket = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (ipc_socket < 0) {
-        LOG_ERROR("ipc socket: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+    // --- Management Logic Placeholder ---
+    // Note: Management commands like -s, -L, -l would be handled here 
+    // before the server starts. We skip that implementation for core startup.
+    // ...
 
-    struct sockaddr_un ipc_addr;
-    memset(&ipc_addr, 0, sizeof(ipc_addr));
-    ipc_addr.sun_family = AF_UNIX;
-    strncpy(ipc_addr.sun_path, get_socket_path(), sizeof(ipc_addr.sun_path) - 1);
-    if (bind(ipc_socket, (struct sockaddr *)&ipc_addr, sizeof(ipc_addr)) < 0) {
-        LOG_ERROR("ipc bind: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    if (listen(ipc_socket, g_cfg.workers) < 0) {
-        LOG_ERROR("ipc listen: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    
-    // array to hold the connected worker FDs
-    int worker_fds[g_cfg.workers];
-    pid_t worker_pids[g_cfg.workers];
-    // fork the worker processes
-    for (int i = 0; i < g_cfg.workers; i++) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            LOG_ERROR("fork: %s", strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-        if (pid == 0) {
-            close(ipc_socket);
-            exec_worker();
-        } // pass the listening socket to the worker
-        worker_pids[i] = pid;
-    }
-    LOG_DEBUG("Parent finished forking %d workers.", g_cfg.workers);
-
+    // 2. SETUP SHARED TCP LISTENER (listen_fd)
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    int optval = 1;
-    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+    if (listen_fd < 0) {
+        LOG_ERROR("socket: %s", strerror(errno));
+        free_and_exit(EXIT_FAILURE);
+    }
+
+    int enable = 1;
+    
+    // Set SO_REUSEADDR
+    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
+        LOG_ERROR("setsockopt(SO_REUSEADDR): %s", strerror(errno));
+        close(listen_fd);
+        free_and_exit(EXIT_FAILURE);
+    }
+
+    // CRITICAL: Set SO_REUSEPORT. This allows all workers to bind to the same port.
+    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
+        // Log a warning, but don't fail, as some old kernels may not support it.
+        LOG_WARN("setsockopt(SO_REUSEPORT) failed. Connection dispatch may be less efficient: %s", strerror(errno));
+    }
+    
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -177,41 +169,91 @@ int main(int argc, char **argv) {
     
     if (bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         LOG_ERROR("Failed to bind to port %d: %s", g_cfg.port, strerror(errno));
+        close(listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
-    if (listen(listen_fd, 10) < 0) {
-        LOG_ERROR("Couldn't listen on port %d...", g_cfg.port);
+    
+    // The backlog is generally set higher for high-volume servers
+    if (listen(listen_fd, 4096) < 0) {
+        LOG_ERROR("Couldn't listen on port %d: %s", g_cfg.port, strerror(errno));
+        close(listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
 
+    // 3. FORK WORKER PROCESSES
+    LOG_INFO("Parent is now the process manager (PID %d).", getpid());
+    LOG_INFO("Spawning %d worker processes...", g_cfg.workers);
+    
+    // array to hold the connected worker PIDs (for process management)
+    pid_t worker_pids[g_cfg.workers]; 
+
+    for (int i = 0; i < g_cfg.workers; i++) {
+        pid_t pid = fork();
+        
+        if (pid < 0) {
+            LOG_ERROR("fork failed during worker spawn: %s", strerror(errno));
+            // In a real scenario, we would clean up existing children here.
+            free_and_exit(EXIT_FAILURE);
+        }
+        
+        if (pid == 0) {
+            // CHILD/WORKER PROCESS
+            LOG_INFO("Worker process started (PID %d).", getpid());
+            
+            // The worker takes ownership of the listener FD (listen_fd).
+            // It will call accept() directly on it in its execution loop.
+            exec_worker(listen_fd);
+            
+            // exec_worker should ideally never return, but if it does, exit.
+            exit(EXIT_FAILURE); 
+        } 
+
+        // PARENT PROCESS
+        worker_pids[i] = pid;
+    }
+    
+    // CRITICAL: Since the workers are now responsible for accepting connections,
+    // the parent closes its own copy of the listening file descriptor.
+    // The parent now only manages the child processes.
+    close(listen_fd); 
+    LOG_DEBUG("Parent closed its copy of listen_fd.");
+    
+    // 4. DAEMONIZATION (IF REQUESTED)
     if (g_cfg.daemonize) {
-        LOG_INFO("starting Caffeine server as a daemon...");
+        LOG_INFO("Starting Caffeine server as a daemon...");
         daemonize();
     }
     
-    LOG_INFO("Parent listening for web requests on port %d...", g_cfg.port);
+    LOG_INFO("Caffeine server running with %d workers on port %d.", g_cfg.workers, g_cfg.port);
+    
+    // 5. PARENT PROCESS MANAGEMENT LOOP
+    // This loop prevents the parent from exiting, allowing it to manage and
+    // potentially respawn workers (though this is a simplified loop).
+    int status;
+    pid_t child_pid;
 
-    LOG_INFO("Parent accepting connections from %d workers...", g_cfg.workers);
-    for (int i = 0; i < g_cfg.workers; i++) {
-        LOG_DEBUG("accepting worker n %d", i);
-        worker_fds[i] = accept(ipc_socket, NULL, NULL);
-        if (worker_fds[i] < 0) {
-            LOG_ERROR("ipc accept: %s", strerror(errno));
-            exit(EXIT_FAILURE);
+    while (1) {
+        // Wait for any child process to change state (e.g., terminate)
+        child_pid = waitpid(-1, &status, 0); 
+
+        if (child_pid < 0) {
+            if (errno == EINTR) continue; // Interrupted by a signal, loop again
+            if (errno == ECHILD) { 
+                // No more children left (all workers died), critical failure
+                LOG_ERROR("All worker processes died. Parent is shutting down.");
+                break;
+            }
+            LOG_ERROR("waitpid error: %s", strerror(errno));
+            break;
         }
-        LOG_DEBUG("Parent accepted IPC connection from worker %d on FD %d.", i, worker_fds[i]);
-        LOG_INFO("Worker %d connected on FD %d.", i, worker_fds[i]);
-    }
-    close(ipc_socket);
-    
-    server_loop(listen_fd, worker_fds);
-    
-    LOG_INFO("Parent performing cleanup and exiting.");
 
-    close(listen_fd);
-    for (int i = 0; i < g_cfg.workers; i++) close(worker_fds[i]);
-    unlink(get_socket_path());
-    remove(get_socket_path());
+        LOG_WARN("Worker PID %d terminated (Status: %d). Respawn logic would go here.", child_pid, status);
+        // NOTE: A production server would attempt to fork a new worker here.
+    }
+    
+    // 6. CLEANUP (Only reached if the main loop breaks)
+    LOG_INFO("Parent performing cleanup and exiting.");
+    // In a full cleanup, we would send SIGTERM to all remaining workers here.
     free_and_exit(EXIT_SUCCESS);
     return 0;
 }

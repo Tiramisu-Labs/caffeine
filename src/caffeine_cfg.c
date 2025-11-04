@@ -18,7 +18,7 @@ void print_usage(const char *progname) {
     fprintf(stderr, "Caffeine: A high-performance pre-fork web server.\n\n");
     fprintf(stderr, "--- Instance Control ---\n");
     fprintf(stderr, "  -n, --name <name>      Specify a unique instance name (MANDATORY for -d, -s, -l, -r).\n");
-    fprintf(stderr, "  -d, --daemon           Run the specified instance in the background.\n");
+    fprintf(stderr, "  -D, --daemon           Run the specified instance in the background.\n");
     fprintf(stderr, "  -s, --stop             Send SIGTERM to stop the specified instance.\n");
     fprintf(stderr, "  -L, --list-instances   Show all running instances (by scanning PID files).\n");
     fprintf(stderr, "\n--- Core Server Settings ---\n");
@@ -165,7 +165,7 @@ int parse_arguments(int argc, char **argv) {
                 LOG_ERROR("an error occured while trying to read the configuration file");
                 return -1;
             }
-        } else if (strcmp(arg, "-d") == 0 || strcmp(arg, "--daemon") == 0) {
+        } else if (strcmp(arg, "-D") == 0 || strcmp(arg, "--daemon") == 0) {
             g_cfg.daemonize = 1;
         } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--stop") == 0) {
             g_cfg.stop_instance = 1;
@@ -188,7 +188,7 @@ int parse_arguments(int argc, char **argv) {
     if ((g_cfg.daemonize || g_cfg.stop_instance || g_cfg.show_log || g_cfg.reset_logs) && 
         (g_cfg.instance_name == NULL || strcmp(g_cfg.instance_name, "caffeine_default") == 0)) 
     {
-        LOG_ERROR("The commands -d, -s, -l, and --reset-logs require a unique instance name (-n <name>).");
+        LOG_ERROR("The commands -D, -s, -l, and --reset-logs require a unique instance name (-n <name>).");
         print_usage(argv[0]);
         return -1;
     }

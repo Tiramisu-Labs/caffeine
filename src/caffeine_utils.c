@@ -32,6 +32,37 @@ char* trim_whitespace(char *str) {
     return str;
 }
 
+ssize_t write_fully(int fd, const char *buf, size_t count) {
+    size_t total_written = 0;
+    while (total_written < count) {
+        ssize_t n = write(fd, buf + total_written, count - total_written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+
+        total_written += n;
+    }
+    return total_written;
+}
+
+char *rstrstr(const char *__haystack, const char *__needle, ssize_t size)
+{
+    char *find = (char *)__haystack;
+    int needle_len = strlen(__needle);
+    int check = 0;
+
+    if (size == 0) return NULL;
+    for (int i = size - 1; i > 0; i--) {
+        if (find[i] == __needle[needle_len - check]) {
+            check++;
+        }
+        if (check == needle_len) return (find + i);
+    }
+    return NULL;
+}
+
 char* get_socket_path() {
     if (g_cfg.socket_path) return g_cfg.socket_path;
 
