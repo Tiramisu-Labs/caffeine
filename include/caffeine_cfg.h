@@ -13,8 +13,6 @@ typedef struct {
     int     reset_logs;
     int     stop_instance;
     int     list_instances;
-    int     argc;
-    char    **argv;
     char    *instance_name;
     char    *exec_path;
     char    *log_level;

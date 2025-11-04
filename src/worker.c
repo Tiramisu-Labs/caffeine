@@ -23,7 +23,7 @@ void worker_redirect_logs() {
     log_fd = open(log_path, O_RDWR | O_CREAT | O_APPEND, 0644); 
     
     if (log_fd < 0) {
-        LOG_ERROR("FATAL: Worker failed to open log file %s: %s\n", log_path, strerror(errno));
+        LOG_ERROR("FATAL: Worker failed to open log file %s: %s", log_path, strerror(errno));
         return;
     }
     
@@ -101,8 +101,14 @@ void handle_grand_child(int client_fd, int *stdin_pipe, headers_t *hdrs)
 
 void handle_request(int client_fd) {
     int flags = fcntl(client_fd, F_GETFL, 0);
-    if (flags == -1) { /* log error and return */ }
-    if (fcntl(client_fd, F_SETFL, flags | O_NONBLOCK) == -1) { /* log error and return */ }
+    if (flags == -1) {
+        LOG_ERROR("FATAL: Worker failed to set fcntl(): %s", strerror(errno));
+        return ;
+    }
+    if (fcntl(client_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        LOG_ERROR("FATAL: Worker failed to set fcntl(): %s", strerror(errno));
+        return ;
+    }
 
     headers_t hdrs = {0};
     if (read_headers(client_fd, &hdrs) < 0) return;
@@ -117,9 +123,9 @@ void handle_request(int client_fd) {
         hdrs.content_length = atoi(length_buffer);
     }
     
-    int stdin_pipe[2]; 
+    int stdin_pipe[2];
     if (pipe(stdin_pipe) < 0) {
-        LOG_ERROR("pipe: %s", strerror(errno));    
+        LOG_ERROR("pipe: %s", strerror(errno));
         return;
     }
 
@@ -142,17 +148,15 @@ void handle_request(int client_fd) {
     ssize_t body_bytes_streamed = 0;
 
     if (body_already_read > 0) {
-        char *body_start = hdrs.headers_end + 4; 
+        char *body_start = hdrs.headers_end + 4;
         write(stdin_pipe[1], body_start, body_already_read);
         body_bytes_streamed += body_already_read;
     }
-    
     
     ssize_t remaining = (ssize_t)(content_length - body_bytes_streamed);
     
     while (remaining > 0) {
         struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
-        
         int poll_result = poll(&pfd, 1, 5000);
 
         if (poll_result < 0) {
@@ -184,19 +188,14 @@ void handle_request(int client_fd) {
     }
     
     close(stdin_pipe[1]);
-    close(client_fd);
+    // close(client_fd);
     // waitpid(handler_pid, NULL, 0);
     LOG_DEBUG("Handler (PID %d): FD %d handed off to child (PID %d). Returning to service loop.", getpid(), client_fd, handler_pid);
 }
 
 void exec_worker(int listen_fd) {
-    if (g_cfg.daemonize) {
-        worker_redirect_logs();
-    }
-    
-    // Ignore SIGPIPE to prevent the worker from crashing if it tries 
-    // to write to a closed socket (client disconnects early).
-    // signal(SIGPIPE, SIG_IGN);
+    if (g_cfg.daemonize) worker_redirect_logs();
+
     signal(SIGCHLD, SIG_IGN);
 
     LOG_INFO("Worker (PID %d) is running and listening on shared FD %d.", getpid(), listen_fd);
@@ -204,7 +203,7 @@ void exec_worker(int listen_fd) {
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
     int client_fd;
-    
+
     while (1) {
         client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
 

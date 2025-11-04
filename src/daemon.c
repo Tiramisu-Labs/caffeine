@@ -61,8 +61,8 @@ void daemonize() {
         exit(EXIT_FAILURE); 
     }
 
-    snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
     LOG_DEBUG("Attempting to write PID %d to PID file '%s'.", getpid(), pid_file);
+    snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
     if (write(fd, pid_str, strlen(pid_str)) < 0) {
         LOG_ERROR("write pid file: ", strerror(errno));
         

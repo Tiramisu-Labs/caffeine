@@ -67,6 +67,7 @@ void init_config()
     memset(&g_cfg, 0, sizeof(config_t));
     g_cfg.port = DEFAULT_PORT;
     g_cfg.workers = DEFAULT_WORKERS;
+    g_cfg.log_level = strdup(DEFAULT_LOG_LEVEL);
 }
 
 static void parse_config_line(char *line) {
@@ -155,6 +156,7 @@ int parse_arguments(int argc, char **argv) {
             g_cfg.workers = atoi(argv[i]);
         } else if (strcmp(arg, "--log-level") == 0) {
             CHECK_ARG(arg);
+            free(g_cfg.log_level);
             g_cfg.log_level = strdup(argv[i]);
         } else if (strcmp(arg, "--path") == 0) {
             CHECK_ARG(arg);
@@ -195,7 +197,6 @@ int parse_arguments(int argc, char **argv) {
     
     #undef CHECK_ARG
     if (!g_cfg.exec_path) g_cfg.exec_path = get_default_path();
-    if (!g_cfg.log_level) g_cfg.log_level = strdup(DEFAULT_LOG_LEVEL);
     if (g_cfg.show_log) { display_log_file(); free_and_exit(EXIT_SUCCESS); }
     if (g_cfg.reset_logs) { reset_log_file(); free_and_exit(EXIT_SUCCESS); }
     if (g_cfg.stop_instance) { stop_server(); free_and_exit(EXIT_SUCCESS); }

@@ -68,78 +68,15 @@ int recv_fd(int socket) {
     return -1;
 }
 
-void server_loop(int listen_fd, int *worker_fds) {
-    struct pollfd pfds[g_cfg.workers];
-    for (int i = 0; i < g_cfg.workers; i++) {
-        pfds[i].fd = worker_fds[i];
-        pfds[i].events = POLLIN;
-    }
-    while (1) {
-        if (g_shutdown_requested) {
-            break;
-        }
-        LOG_DEBUG("Parent loop start. Listening for new client on FD %d.", listen_fd);
-        int client_fd = accept(listen_fd, NULL, NULL);
-        LOG_DEBUG("Parent accepted client FD %d.", client_fd);
-        if (client_fd < 0) {
-            if (errno == EINTR) continue;
-            LOG_ERROR("accept: %s", strerror(errno));
-            continue;
-        }
-
-        int flags = fcntl(client_fd, F_GETFD);
-        if (flags != -1) fcntl(client_fd, F_SETFD, flags | FD_CLOEXEC);
-        LOG_DEBUG("Parent polling workers for readiness...");
-        if (poll(pfds, g_cfg.workers, -1) < 0) {
-            if (errno == EINTR) continue;
-            LOG_ERROR("poll: %s", strerror(errno));
-            continue;
-        }
-        LOG_DEBUG("Poll returned. Checking for ready worker for client FD %d.", client_fd);
-        for (int i = 0; i < g_cfg.workers; i++) {
-            int worker_ipc_fd = worker_fds[i];
-            if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
-                char ready_byte;
-                ssize_t bytes_read = read(pfds[i].fd, &ready_byte, 1);
-                
-                if (bytes_read <= 0) {
-                    LOG_ERROR("Worker %d disconnected. Reaping.\n", i);
-                    // TODO: respawn the worker here
-                    break; 
-                }
-
-                send_fd(pfds[i].fd, client_fd);
-                LOG_DEBUG("Parent sent FD %d to worker %d.", client_fd, i);
-                LOG_INFO("Dispatched client FD %d to ready worker %d.", client_fd, i);
-                close(client_fd);
-                break;
-            }
-        }
-    }
-}
-
+pid_t *g_worker_pids = NULL;
 int main(int argc, char **argv) {
-    // 1. INITIAL SETUP
     init_config();
 
-    // Store arguments for later management commands
-    g_cfg.argc = argc;
-    g_cfg.argv = argv;
-
-    if (sig_init() < 0) {
-        LOG_ERROR("Failed to initialize signals: %s", strerror(errno));
-    }
-    
+        
     if (parse_arguments(argc, argv) < 0) {
         free_and_exit(EXIT_FAILURE);
     }
     
-    // --- Management Logic Placeholder ---
-    // Note: Management commands like -s, -L, -l would be handled here 
-    // before the server starts. We skip that implementation for core startup.
-    // ...
-
-    // 2. SETUP SHARED TCP LISTENER (listen_fd)
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
         LOG_ERROR("socket: %s", strerror(errno));
@@ -147,18 +84,15 @@ int main(int argc, char **argv) {
     }
 
     int enable = 1;
-    
-    // Set SO_REUSEADDR
     if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
         LOG_ERROR("setsockopt(SO_REUSEADDR): %s", strerror(errno));
         close(listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
-
-    // CRITICAL: Set SO_REUSEPORT. This allows all workers to bind to the same port.
     if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
-        // Log a warning, but don't fail, as some old kernels may not support it.
         LOG_WARN("setsockopt(SO_REUSEPORT) failed. Connection dispatch may be less efficient: %s", strerror(errno));
+        close(listen_fd);
+        free_and_exit(EXIT_FAILURE);
     }
     
     struct sockaddr_in server_addr;
@@ -173,87 +107,66 @@ int main(int argc, char **argv) {
         free_and_exit(EXIT_FAILURE);
     }
     
-    // The backlog is generally set higher for high-volume servers
     if (listen(listen_fd, 4096) < 0) {
         LOG_ERROR("Couldn't listen on port %d: %s", g_cfg.port, strerror(errno));
         close(listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
 
-    // 3. FORK WORKER PROCESSES
+    if (g_cfg.daemonize) {
+        LOG_INFO("Starting Caffeine server as a daemon...");
+        daemonize();
+    }
     LOG_INFO("Parent is now the process manager (PID %d).", getpid());
     LOG_INFO("Spawning %d worker processes...", g_cfg.workers);
-    
-    // array to hold the connected worker PIDs (for process management)
-    pid_t worker_pids[g_cfg.workers]; 
 
+    pid_t worker_pids[g_cfg.workers];
     for (int i = 0; i < g_cfg.workers; i++) {
         pid_t pid = fork();
         
         if (pid < 0) {
             LOG_ERROR("fork failed during worker spawn: %s", strerror(errno));
-            // In a real scenario, we would clean up existing children here.
             free_and_exit(EXIT_FAILURE);
         }
         
         if (pid == 0) {
-            // CHILD/WORKER PROCESS
             LOG_INFO("Worker process started (PID %d).", getpid());
-            
-            // The worker takes ownership of the listener FD (listen_fd).
-            // It will call accept() directly on it in its execution loop.
             exec_worker(listen_fd);
-            
-            // exec_worker should ideally never return, but if it does, exit.
             exit(EXIT_FAILURE); 
         } 
-
-        // PARENT PROCESS
         worker_pids[i] = pid;
     }
     
-    // CRITICAL: Since the workers are now responsible for accepting connections,
-    // the parent closes its own copy of the listening file descriptor.
-    // The parent now only manages the child processes.
     close(listen_fd); 
     LOG_DEBUG("Parent closed its copy of listen_fd.");
-    
-    // 4. DAEMONIZATION (IF REQUESTED)
-    if (g_cfg.daemonize) {
-        LOG_INFO("Starting Caffeine server as a daemon...");
-        daemonize();
-    }
-    
     LOG_INFO("Caffeine server running with %d workers on port %d.", g_cfg.workers, g_cfg.port);
-    
-    // 5. PARENT PROCESS MANAGEMENT LOOP
-    // This loop prevents the parent from exiting, allowing it to manage and
-    // potentially respawn workers (though this is a simplified loop).
-    int status;
-    pid_t child_pid;
 
-    while (1) {
-        // Wait for any child process to change state (e.g., terminate)
-        child_pid = waitpid(-1, &status, 0); 
-
-        if (child_pid < 0) {
-            if (errno == EINTR) continue; // Interrupted by a signal, loop again
-            if (errno == ECHILD) { 
-                // No more children left (all workers died), critical failure
-                LOG_ERROR("All worker processes died. Parent is shutting down.");
-                break;
-            }
-            LOG_ERROR("waitpid error: %s", strerror(errno));
-            break;
-        }
-
-        LOG_WARN("Worker PID %d terminated (Status: %d). Respawn logic would go here.", child_pid, status);
-        // NOTE: A production server would attempt to fork a new worker here.
+    if (sig_init() < 0) {
+        LOG_ERROR("Failed to initialize signals: %s", strerror(errno));
+        for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
+        free_and_exit(EXIT_FAILURE);
     }
-    
-    // 6. CLEANUP (Only reached if the main loop breaks)
-    LOG_INFO("Parent performing cleanup and exiting.");
-    // In a full cleanup, we would send SIGTERM to all remaining workers here.
+
+    sigset_t oldmask, term_mask;
+    if (sigemptyset(&term_mask) < 0 || sigaddset(&term_mask, SIGTERM) < 0) {
+        LOG_ERROR("sigset operations failed.");
+        for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
+        free_and_exit(EXIT_FAILURE);
+    }
+
+    if (sigprocmask(SIG_BLOCK, &term_mask, &oldmask) < 0) {
+        LOG_ERROR("sigprocmask BLOCK failed.");
+        for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
+        free_and_exit(EXIT_FAILURE);
+    }
+
+    LOG_INFO("Parent manager is now gracefully blocking, waiting for SIGTERM.");
+    while (!g_shutdown_requested) sigsuspend(&oldmask);
+
+    sigprocmask(SIG_SETMASK, &oldmask, NULL);
+
+    LOG_INFO("Parent performing cleanup and exiting. Killing workers.");
+    for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
     free_and_exit(EXIT_SUCCESS);
     return 0;
 }
