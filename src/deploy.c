@@ -19,15 +19,16 @@ int deploy_single_file(const char *src_path, const char *dst_path) {
     ssize_t bytes_read, bytes_written;
     int result = -1;
     
+    printf("caffeine: deploying file: '%s'\n", src_path);
     src_fd = open(src_path, O_RDONLY);
     if (src_fd == -1) {
-        LOG_ERROR("Failed to open source file '%s': %s", src_path, strerror(errno));
+        fprintf(stderr, "caffine: error: failed to open source file '%s': %s\n", src_path, strerror(errno));
         return -1;
     }
 
     dst_fd = open(dst_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (dst_fd == -1) {
-        LOG_ERROR("Failed to create destination file '%s': %s", dst_path, strerror(errno));
+        fprintf(stderr, "caffeine: error: failed to create destination file '%s': %s\n", dst_path, strerror(errno));
         goto cleanup;
     }
 
@@ -36,23 +37,21 @@ int deploy_single_file(const char *src_path, const char *dst_path) {
         
         if (bytes_written != bytes_read) {
             if (bytes_written == -1) {
-                LOG_ERROR("Write error to destination file '%s': %s", dst_path, strerror(errno));
+                fprintf(stderr,"%scaffeine: error: write error to destination file '%s': %s%s\n", COLOR_BRIGHT_RED, dst_path, strerror(errno), COLOR_RESET);
             } else {
-                LOG_ERROR("Incomplete write to destination file '%s'.", dst_path);
+                fprintf(stderr,"%scaffeine: error: incomplete write to destination file '%s'%s\n",COLOR_BRIGHT_RED, dst_path, COLOR_RESET);
             }
             goto cleanup;
         }
     }
 
     if (bytes_read == -1) {
-        LOG_ERROR("Read error from source file '%s': %s", src_path, strerror(errno));
+        fprintf(stderr, "%scaffeine: error: read error from source file '%s': %s%s", COLOR_BRIGHT_RED, src_path, strerror(errno), COLOR_RESET);
         goto cleanup;
     }
     if (chmod(dst_path, 0755) == -1) {
-        LOG_WARN("Failed to set executable permissions on '%s': %s", dst_path, strerror(errno));
+        fprintf(stdout, "%scaffeine: warning: failed to set executable permissions on '%s': %s%s\n", COLOR_BRIGHT_YELLOW, dst_path, strerror(errno), COLOR_RESET);
     }
-
-    LOG_INFO("Successfully deployed file: %s -> %s", src_path, dst_path);
     result = 0;
 
 cleanup:
@@ -69,7 +68,7 @@ int deploy_directory_recursive(const char *src, const char *dst) {
     int result = 0;
 
     if ((dir = opendir(src)) == NULL) {
-        LOG_ERROR("Cannot open source directory '%s': %s", src, strerror(errno));
+        fprintf(stderr, "%scaffeine: error: cannot open source directory '%s': %s%s\n", COLOR_BRIGHT_RED, src, strerror(errno), COLOR_RESET);
         return -1;
     }
 
@@ -85,14 +84,14 @@ int deploy_directory_recursive(const char *src, const char *dst) {
         snprintf(dst_path, MAX_PATH, "%s/%s", dst, entry->d_name);
 
         if (stat(src_path, &st) == -1) {
-            LOG_WARN("Could not stat file '%s', skipping: %s", src_path, strerror(errno));
+            fprintf(stdout, "%scaffeine: warning: could not stat file '%s', skipping: %s%s\n", COLOR_BRIGHT_YELLOW, src_path, strerror(errno), COLOR_RESET);
             continue;
         }
 
         if (S_ISDIR(st.st_mode)) {
             if (mkdir(dst_path, 0755) == -1) {
                 if (errno != EEXIST) {
-                    LOG_ERROR("Failed to create destination subdirectory '%s': %s", dst_path, strerror(errno));
+                    fprintf(stderr, "%scaffeine: error: failed to create destination subdirectory '%s': %s%s\n", COLOR_BRIGHT_RED, dst_path, strerror(errno), COLOR_RESET);
                     result = -1;
                     break;
                 }
@@ -115,13 +114,13 @@ int deploy_directory(const char *source_path, const char *target_dir) {
     const char *folder_name = basename((char *)source_path);
 
     if (snprintf(target_path_buffer, MAX_PATH, "%s/%s", target_dir, folder_name) >= MAX_PATH) {
-        LOG_ERROR("Target path buffer overflow for initial directory.");
+        fprintf(stderr, "%scaffeine: error: target path buffer overflow for initial directory%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
         return -1;
     }
 
     if (mkdir(target_path_buffer, 0755) == -1) {
         if (errno != EEXIST) {
-            LOG_ERROR("Failed to create target directory '%s': %s", target_path_buffer, strerror(errno));
+            fprintf(stderr, "%scaffeine: error: Failed to create target directory '%s': %s%s\n", COLOR_BRIGHT_RED, target_path_buffer, strerror(errno), COLOR_RESET);
             return -1;
         }
     }
@@ -134,7 +133,7 @@ int handle_deploy(const char *source_path) {
     char *target_dir = g_cfg.exec_path;
 
     if (stat(source_path, &st) == -1) {
-        LOG_ERROR("Deploy source '%s' not found or inaccessible: %s", source_path, strerror(errno));
+        fprintf(stderr, "%scaffeine: error: deploy source '%s': %s%s\n",COLOR_BRIGHT_RED, source_path, strerror(errno), COLOR_RESET);
         return -1;
     }
 
@@ -145,13 +144,12 @@ int handle_deploy(const char *source_path) {
         char *file_name = strrchr(source_path, '/');
         if (file_name) strncpy(full_path + dst_path_len, file_name + 1, strlen(file_name) - 1);
         else strncpy(full_path + dst_path_len, source_path, strlen(source_path));
-        printf("caffeine: deploying single file: '%s'\n", source_path);
         return deploy_single_file(source_path, full_path);
     } else if (S_ISDIR(st.st_mode)) {
-        LOG_INFO("Deploying directory contents: %s", source_path);
+        fprintf(stdout, "caffeine: deploying directory contents: %s\n", source_path);
         return deploy_directory(source_path, target_dir);
     } else {
-        LOG_ERROR("Deploy source '%s' is not a file or directory.", source_path);
+        fprintf(stderr, "%scaffeine: error: deploy source '%s' is not a file or directory.%s\n",COLOR_BRIGHT_RED, source_path, COLOR_RESET);
         return -1;
     }
 }

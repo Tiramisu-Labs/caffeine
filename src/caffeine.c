@@ -72,11 +72,8 @@ int recv_fd(int socket) {
 pid_t *g_worker_pids = NULL;
 int main(int argc, char **argv) {
     init_config();
-
         
-    if (parse_arguments(argc, argv) < 0) {
-        free_and_exit(EXIT_FAILURE);
-    }
+    if (parse_arguments(argc, argv) < 0) free_and_exit(EXIT_FAILURE);
     
     if (g_cfg.deploy) {
         int i = 0;
@@ -90,18 +87,18 @@ int main(int argc, char **argv) {
 
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
-        LOG_ERROR("socket: %s", strerror(errno));
+        fprintf(stderr, "%scaffeine: error: socket: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
         free_and_exit(EXIT_FAILURE);
     }
 
     int enable = 1;
     if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
-        LOG_ERROR("setsockopt(SO_REUSEADDR): %s", strerror(errno));
+        fprintf(stderr, "%scaffeine: error: setsockopt(SO_REUSEADDR): %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
         close(listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
     if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
-        LOG_WARN("setsockopt(SO_REUSEPORT) failed. Connection dispatch may be less efficient: %s", strerror(errno));
+        fprintf(stderr, "%scaffeine: error: setsockopt(SO_REUSEPORT) failed: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
         close(listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
@@ -113,47 +110,46 @@ int main(int argc, char **argv) {
     server_addr.sin_port = htons(g_cfg.port);
     
     if (bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        LOG_ERROR("Failed to bind to port %d: %s", g_cfg.port, strerror(errno));
+        fprintf(stderr, "%scaffeine: error: failed to bind to port %d: %s%s\n", COLOR_BRIGHT_RED, g_cfg.port, strerror(errno), COLOR_RESET);
         close(listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
     
     if (listen(listen_fd, 4096) < 0) {
-        LOG_ERROR("Couldn't listen on port %d: %s", g_cfg.port, strerror(errno));
+        fprintf(stderr, "%scaffeine: error: couldn't listen on port %d: %s%s\n", COLOR_BRIGHT_RED, g_cfg.port, strerror(errno), COLOR_RESET);
         close(listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
 
     if (g_cfg.daemonize) {
-        LOG_INFO("Starting Caffeine server as a daemon...");
+        fprintf(stdout, "%scaffeine: starting Caffeine server as a daemon...%s\n", COLOR_GREEN, COLOR_RESET);
         daemonize();
     }
-    LOG_INFO("Parent is now the process manager (PID %d).", getpid());
-    LOG_INFO("Spawning %d worker processes...", g_cfg.workers);
+    fprintf(stdout, "caffeine: spawning %d worker processes...\n", g_cfg.workers);
 
     pid_t worker_pids[g_cfg.workers];
     for (int i = 0; i < g_cfg.workers; i++) {
         pid_t pid = fork();
         
         if (pid < 0) {
-            LOG_ERROR("fork failed during worker spawn: %s", strerror(errno));
+            fprintf(stderr, "%scaffeine: error: fork: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
             free_and_exit(EXIT_FAILURE);
         }
         
         if (pid == 0) {
-            LOG_INFO("Worker process started (PID %d).", getpid());
+            fprintf(stdout, "caffeine: worker process started (PID %d).", getpid());
             exec_worker(listen_fd);
             exit(EXIT_FAILURE); 
         } 
         worker_pids[i] = pid;
     }
     
-    close(listen_fd); 
-    LOG_DEBUG("Parent closed its copy of listen_fd.");
-    LOG_INFO("Caffeine server running with %d workers on port %d.", g_cfg.workers, g_cfg.port);
+    close(listen_fd);
+    
+    fprintf(stdout, "%scaffeine: server running with %d workers on port %d%s\n\n", COLOR_GREEN, g_cfg.workers, g_cfg.port, COLOR_RESET);
 
     if (sig_init() < 0) {
-        LOG_ERROR("Failed to initialize signals: %s", strerror(errno));
+        LOG_ERROR("Failed to initialize signals: %s. exiting...", strerror(errno));
         for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
         free_and_exit(EXIT_FAILURE);
     }
@@ -171,7 +167,6 @@ int main(int argc, char **argv) {
         free_and_exit(EXIT_FAILURE);
     }
 
-    LOG_INFO("Parent manager is now gracefully blocking, waiting for SIGTERM.");
     while (!g_shutdown_requested) sigsuspend(&oldmask);
 
     sigprocmask(SIG_SETMASK, &oldmask, NULL);

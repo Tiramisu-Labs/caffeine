@@ -15,7 +15,7 @@
 config_t g_cfg;
 
 void print_usage(const char *progname) {
-    fprintf(stderr, "Usage: %s [OPTIONS]\n", progname);
+    fprintf(stderr, "\nUsage: %s [OPTIONS]\n", progname);
     fprintf(stderr, "Caffeine: A high-performance pre-fork web server.\n\n");
     fprintf(stderr, "--- Instance Control ---\n");
     fprintf(stderr, "  -n, --name <name>      Specify a unique instance name (MANDATORY for -d, -s, -l, -r).\n");
@@ -43,7 +43,7 @@ void print_usage(const char *progname) {
 static void reset_log_file() {
     int fd = open(get_log_path(), O_WRONLY | O_TRUNC);
     if (fd < 0) {
-        LOG_ERROR("Error: Could not open log file at %s: %s\n", get_log_path(), strerror(errno));
+        fprintf(stderr, "caffeine: error: Could not open log file at %s: %s\n", get_log_path(), strerror(errno));
         return;
     }
     close(fd);
@@ -52,7 +52,7 @@ static void reset_log_file() {
 static void display_log_file() {
     int fd = open(get_log_path(), O_RDONLY);
     if (fd < 0) {
-        LOG_ERROR("Error: Could not open log file at %s: %s\n", get_log_path(), strerror(errno));
+        fprintf(stderr, "caffeine: error: Could not open log file at %s: %s\n", get_log_path(), strerror(errno));
         return;
     }
 
@@ -61,7 +61,7 @@ static void display_log_file() {
 
     while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
         if (write(STDOUT_FILENO, buffer, bytes_read) < 0) {
-            LOG_ERROR("Error writing to stdout: %s", strerror(errno));
+            fprintf(stderr, "caffeine: error writing to stdout: %s\n", strerror(errno));
             break;
         }
     }
@@ -76,7 +76,7 @@ void init_config()
     g_cfg.log_level = strdup(DEFAULT_LOG_LEVEL);
 }
 
-static void parse_config_line(char *line) {
+static void parse_config_line(char *line, int line_number) {
     char *key;
     char *value;
 
@@ -86,7 +86,7 @@ static void parse_config_line(char *line) {
 
     value = strchr(line, '=');
     if (value == NULL) {
-        LOG_ERROR("Config file: Skipping malformed line (no '=')");
+        fprintf(stderr, "caffeine: config file error: line: %d. Skipping malformed line (no '=')\n", line_number);
         return;
     }
 
@@ -117,20 +117,19 @@ static int read_config_file(const char *path) {
     char line[MAX_LINE_LENGTH];
     
     if (!path) {
-        LOG_ERROR("read_config_file called without a path.");
+        fprintf(stderr, "caffeine: error: no path provided.\n");
         return -1;
     }
 
     file = fopen(path, "r");
     if (file == NULL) {
-        LOG_ERROR("failed to open configuration file at: %s. Check path and permissions.", path);
+        fprintf(stderr, "caffeine: error: failed to open configuration file at: %s. Check path and permissions.\n", path);
         return -1;
     }
-
-    LOG_DEBUG("reading configuration from: %s", path);
     
+    int line_number = 0;
     while (fgets(line, MAX_LINE_LENGTH, file) != NULL) {
-        parse_config_line(line);
+        parse_config_line(line, line_number);
     }
 
     fclose(file);
@@ -147,7 +146,7 @@ int parse_arguments(int argc, char **argv) {
 
         #define CHECK_ARG(option)                                       \
             if (i + 1 >= argc) {                                        \
-                LOG_ERROR("option %s requires an argument.", option);   \
+                fprintf(stderr, "caffeine: option %s requires an argument\n", option);   \
                 print_usage(argv[0]);                                   \
                 return -1;                                              \
             }                                                           \
@@ -174,7 +173,7 @@ int parse_arguments(int argc, char **argv) {
         } else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--config") == 0) {
             CHECK_ARG(argv[i]);
             if (read_config_file(arg) < 0) {
-                LOG_ERROR("an error occured while trying to read the configuration file");
+                fprintf(stderr, "an error occured while trying to read the configuration file\n");
                 return -1;
             }
         } else if (strcmp(arg, "-D") == 0 || strcmp(arg, "--daemon") == 0) {
@@ -195,7 +194,7 @@ int parse_arguments(int argc, char **argv) {
             print_usage(argv[0]);
             return -1;
         } else {
-            LOG_ERROR("unknown option: %s", arg);
+            fprintf(stderr, "unknown option: %s\n", arg);
             print_usage(argv[0]);
             return -1;
         }
@@ -204,7 +203,7 @@ int parse_arguments(int argc, char **argv) {
     if ((g_cfg.daemonize || g_cfg.stop_instance || g_cfg.show_log || g_cfg.reset_logs) && 
         (g_cfg.instance_name == NULL || strcmp(g_cfg.instance_name, "caffeine_default") == 0)) 
     {
-        LOG_ERROR("The commands -D, -s, -l, and --reset-logs require a unique instance name (-n <name>).");
+        fprintf(stderr, "The commands -D, -s, -l, and --reset-logs require a unique instance name (-n <name>)\n");
         print_usage(argv[0]);
         return -1;
     }

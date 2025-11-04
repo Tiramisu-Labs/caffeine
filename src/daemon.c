@@ -15,24 +15,25 @@ void daemonize() {
 
     pid = fork();
     if (pid < 0) {
-        LOG_ERROR("fork: %s", strerror(errno));
+        fprintf(stderr, "%scaffeine: error: fork: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
         exit(EXIT_FAILURE);
     }
     if (pid > 0) exit(EXIT_SUCCESS); 
 
     sid = setsid();
-    LOG_DEBUG("Process successfully started a new session (SID %d).", sid);
+    fprintf(stdout, "caffeine: process successfully started a new session (SID %d)\n", sid);
     if (sid < 0) {
-        LOG_ERROR("setsid: %s", strerror(errno));
-        exit(EXIT_FAILURE);
+        fprintf(stderr, "%scaffeine: error: setsid: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
+        free_and_exit(EXIT_FAILURE);
     }
 
     if (chdir("/") < 0) {
-        LOG_ERROR("chdir: %s", strerror(errno));
+        fprintf(stderr, "%scaffeine: error: chdir: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
+        free_and_exit(EXIT_FAILURE);
     }
-    LOG_DEBUG("Changed working directory to '/'.");
+    
     umask(0);
-    LOG_DEBUG("Closing standard file descriptors (0, 1, 2).");
+    int stderr_cpy = dup(STDERR_FILENO);
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
@@ -40,11 +41,12 @@ void daemonize() {
     char *log_path = get_log_path();
     fd = open(log_path, O_RDWR | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
-        LOG_ERROR("coudln't open file %s: ", log_path);
+        dprintf(stderr_cpy, "%scaffeine: error: coudln't open file %s: %s\n", COLOR_BRIGHT_RED, log_path, COLOR_RESET);
         exit(EXIT_FAILURE);
     }
 
     if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
+        dprintf(stderr_cpy, "%scaffeine: error: dup2: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
         close(fd);
         exit(EXIT_FAILURE);
     }
@@ -57,22 +59,22 @@ void daemonize() {
     char *pid_file = get_pid_path();
     fd = open(pid_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
-        LOG_ERROR("open pid file: ", strerror(errno));
+        dprintf(stderr_cpy, "%scaffeine: error: open pid file: %s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
         exit(EXIT_FAILURE); 
     }
 
-    LOG_DEBUG("Attempting to write PID %d to PID file '%s'.", getpid(), pid_file);
+    dprintf(stderr_cpy, "%scaffeine: debug: attempting to write PID %d to PID file '%s'%s\n", COLOR_BLUE, getpid(), pid_file, COLOR_RESET);
     snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
     if (write(fd, pid_str, strlen(pid_str)) < 0) {
-        LOG_ERROR("write pid file: ", strerror(errno));
+        dprintf(stderr_cpy, "%ccaffeine: error: write pid file: %s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
         
-        LOG_INFO("removing file '%s'...", pid_file);
-        if (remove(pid_file) == 0) LOG_INFO("file '%s' removed", pid_file);
-        else LOG_ERROR("error: unable to delete the file");    
+        dprintf(stderr_cpy, "%scaffeine: removing file '%s'...%s\n", COLOR_BRIGHT_YELLOW, pid_file, COLOR_RESET);
+        if (remove(pid_file) == 0) dprintf(stderr_cpy, "caffeine: file '%s' removed\n", pid_file);
+        else dprintf(stderr_cpy, "%scaffeine: error: unable to delete the file%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
 
         close(fd);
         exit(EXIT_FAILURE);
     }
-
+    close(stderr_cpy);
     close(fd);
 }
