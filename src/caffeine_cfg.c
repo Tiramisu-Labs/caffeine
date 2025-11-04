@@ -28,7 +28,7 @@ void print_usage(const char *progname) {
     fprintf(stderr, "  -w, --workers <num>    Set the number of worker processes (default: %d).\n", DEFAULT_WORKERS);
     fprintf(stderr, "  --path <path>          Set the base path for executable handlers (default: %s).\n", EXEC_PATH);
     fprintf(stderr, "\n--- Content Deployment ---\n");
-    fprintf(stderr, "  --deploy <path>        Upload a file or directory to the server's execution path.\n");
+    fprintf(stderr, "  -d, --deploy <path>    Upload a file or directory to the server's execution path.\n");
     fprintf(stderr, "                         If <path> is a directory, its contents are copied recursively\n");
     fprintf(stderr, "                         to a new subdirectory within the execution path.\n");
     fprintf(stderr, "                         --path can be specified to change deploy directory.\n");
