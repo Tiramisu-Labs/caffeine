@@ -11,64 +11,6 @@
 #include <signal.h>
 #include <sys/types.h>
 
-int send_fd(int socket, int fd_to_send) {
-    struct msghdr msg = {0};
-    struct iovec iov[1];
-    char dummy_buffer = 'A';
-    char control_buffer[CMSG_SPACE(sizeof(int))];
-
-    iov[0].iov_base = &dummy_buffer;
-    iov[0].iov_len = sizeof(dummy_buffer);
-    msg.msg_iov = iov;
-    msg.msg_iovlen = 1;
-
-    msg.msg_control = control_buffer;
-    msg.msg_controllen = sizeof(control_buffer);
-
-    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-    cmsg->cmsg_level = SOL_SOCKET;
-    cmsg->cmsg_type = SCM_RIGHTS;
-    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
-    *(int *)CMSG_DATA(cmsg) = fd_to_send;
-
-    if (sendmsg(socket, &msg, 0) < 0) {
-        LOG_ERROR("sendmsg: %s", strerror(errno));
-        return -1;
-    }
-    return 0;
-}
-
-int recv_fd(int socket) {
-    struct msghdr msg = {0};
-    struct iovec iov[1];
-    char dummy_buffer;
-    char control_buffer[CMSG_SPACE(sizeof(int))];
-
-    iov[0].iov_base = &dummy_buffer;
-    iov[0].iov_len = sizeof(dummy_buffer);
-    msg.msg_iov = iov;
-    msg.msg_iovlen = 1;
-
-    msg.msg_control = control_buffer;
-    msg.msg_controllen = sizeof(control_buffer);
-
-    if (recvmsg(socket, &msg, 0) < 0) {
-        if (errno == ECONNRESET) {
-            LOG_DEBUG("recvmsg: Parent closed IPC socket (ECONNRESET). Signaling worker exit.");
-            return -1; 
-        }
-        
-        LOG_ERROR("recvmsg: %s", strerror(errno));
-        return -1;
-    }
-
-    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-    if (cmsg && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
-        return *(int *)CMSG_DATA(cmsg);
-    }
-    return -1;
-}
-
 pid_t *g_worker_pids = NULL;
 int main(int argc, char **argv) {
     init_config();

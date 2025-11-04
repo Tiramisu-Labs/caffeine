@@ -10,7 +10,7 @@ HANDLER_ECHO="echo"
 HANDLER_BASH="handler.sh"
 HANDLER_PYTHON="handler.py"
 TEST_INSTANCE_NAME="integration_test"
-TEST_PORT="8080"
+TEST_PORT="8989"
 TEST_URL="http://127.0.0.1:${TEST_PORT}/"
 
 CAFFEINE_HOME="${HOME}/.config/caffeine"
@@ -53,7 +53,7 @@ fi
 
 echo "--- 2. COMPILING AND DEPLOYING HANDLER ---"
 
-gcc echo.c -o $HANDLER_ECHO
+gcc test_files/echo.c -o $HANDLER_ECHO
 if [ $? -ne 0 ]; then
     echo "ERROR: Handler compilation failed."
     exit 1
@@ -66,7 +66,7 @@ if [ $? -ne 0 ]; then
 fi
 echo "Handler deployed to: $CAFFEINE_HOME/$HANDLER_ECHO"
 
-cp $HANDLER_BASH "$CAFFEINE_HOME/"
+cp test_files/$HANDLER_BASH "$CAFFEINE_HOME/"
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to move handler to $CAFFEINE_HOME. Check permissions."
     exit 1
@@ -74,7 +74,7 @@ fi
 echo "Handler deployed to: $CAFFEINE_HOME/$HANDLER_BASH"
 
 
-cp $HANDLER_PYTHON "$CAFFEINE_HOME/"
+cp test_files/$HANDLER_PYTHON "$CAFFEINE_HOME/"
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to move handler to $CAFFEINE_HOME. Check permissions."
     exit 1
@@ -83,7 +83,7 @@ echo "Handler deployed to: $CAFFEINE_HOME/$HANDLER_PYTHON"
 
 echo "--- 3. STARTING CAFFEINE INSTANCE ---"
 
-"$CAFFEINE_EXE" -d -n "$TEST_INSTANCE_NAME" -p "$TEST_PORT" -w 1 
+"$CAFFEINE_EXE" -D -n "$TEST_INSTANCE_NAME" -p "$TEST_PORT" -w 1 
 if [ $? -ne 0 ]; then
     echo "FATAL ERROR: Caffeine failed to start."
     exit 1

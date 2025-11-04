@@ -41,8 +41,6 @@ typedef struct headers_s {
 
 extern pid_t *g_worker_pids;
 
-int send_fd(int socket, int fd_to_send);
-int recv_fd(int socket);
 void exec_worker(int listen_fd);
 void daemonize();
 

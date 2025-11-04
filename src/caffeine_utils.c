@@ -47,6 +47,7 @@ ssize_t write_fully(int fd, const char *buf, size_t count) {
     return total_written;
 }
 
+/* TO FIX */
 char *rstrstr(const char *__haystack, const char *__needle, ssize_t size)
 {
     char *find = (char *)__haystack;
@@ -87,7 +88,6 @@ char* get_socket_path() {
     }
 
     snprintf(path + dir_len, full_len - dir_len, "%s%s%s", SOCK_FILE_PREFIX, g_cfg.instance_name, SOCK_FILE_SUFFIX);
-    LOG_DEBUG("Socket path resolved to: %s", path);
     g_cfg.socket_path = path;
     return g_cfg.socket_path;
 }
@@ -113,7 +113,6 @@ char* get_pid_path() {
     }
 
     snprintf(path + dir_len, full_len - dir_len, "%s%s%s", PID_FILE_PREFIX, g_cfg.instance_name, PID_FILE_SUFFIX);
-    LOG_DEBUG("Pid path resolved to: %s", path);
     g_cfg.pid_path = path;
     return g_cfg.pid_path;
 }
@@ -145,7 +144,6 @@ char* get_log_path() {
     }
 
     snprintf(path + dir_len, full_len - dir_len, "%s%s", log_file_suffix, ".log");
-    LOG_DEBUG("Log path resolved to: %s", path);
     g_cfg.log_path = path;
     return g_cfg.log_path;
 }
