@@ -139,7 +139,7 @@ void handle_request(int client_fd) {
 
     if (handler_pid == 0) {
         handle_grand_child(client_fd, stdin_pipe, &hdrs);
-        LOG_ERROR("execlp: %s", strerror(errno));
+        LOG_ERROR("execvpe: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
 
@@ -188,7 +188,7 @@ void handle_request(int client_fd) {
     }
     
     close(stdin_pipe[1]);
-    // close(client_fd);
+    close(client_fd);
     // waitpid(handler_pid, NULL, 0);
     LOG_DEBUG("Handler (PID %d): FD %d handed off to child (PID %d). Returning to service loop.", getpid(), client_fd, handler_pid);
 }
@@ -202,26 +202,24 @@ void exec_worker(int listen_fd) {
 
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
+    char client_ip[INET_ADDRSTRLEN];
     int client_fd;
 
     while (1) {
         client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
 
         if (client_fd < 0) {
-            if (errno == EINTR) {
-                continue; 
-            }
+            if (errno == EINTR) continue;
             
             LOG_ERROR("Worker accept() failed: %s", strerror(errno));
             close(listen_fd);
             exit(EXIT_FAILURE);
         }
 
-        char client_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
 
-        LOG_INFO("Worker (PID %d) accepted connection from %s:%d on new FD %d.", 
-                 getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
+        LOG_INFO("Worker (PID %d) accepted connection from %s:%d on new FD %d.",
+                getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
 
         handle_request(client_fd);
         

@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
         }
         
         if (pid == 0) {
-            fprintf(stdout, "caffeine: worker process started (PID %d).", getpid());
+            fprintf(stdout, "caffeine: worker process started (PID %d)\n", getpid());
             exec_worker(listen_fd);
             exit(EXIT_FAILURE); 
         } 

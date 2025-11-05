@@ -12,9 +12,9 @@ Caffeine uses a **Shared Listener** model, which is highly efficient because it 
 
 The parent process acts as the initializer and supervisor. It performs three key tasks:
 
-1. Create and bind the **single TCP listening socket**.  
-2. Set the critical **SO\_REUSEPORT** socket option on the listener.  
-3. **Pre-fork** the pool of worker processes.  
+1. Create and bind the **single TCP listening socket**.
+2. Set the critical **SO\_REUSEPORT** socket option on the listener.
+3. **Pre-fork** the pool of worker processes.
 4. Wait for termination signals to manage shutdown.
 
 The parent process does **not** accept client connections or dispatch requests. It closes the listening file descriptor after forking, allowing workers to take over.
