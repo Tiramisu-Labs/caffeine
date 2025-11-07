@@ -48,18 +48,23 @@ ssize_t write_fully(int fd, const char *buf, size_t count) {
 }
 
 /* TO FIX */
-char *rstrstr(const char *__haystack, const char *__needle, ssize_t size)
+char *find_headers_end(const char *__haystack, const char *__needle, size_t size)
 {
-    char *find = (char *)__haystack;
     int needle_len = strlen(__needle);
     int check = 0;
 
     if (size == 0) return NULL;
-    for (int i = size - 1; i > 0; i--) {
-        if (find[i] == __needle[needle_len - check]) {
+    for (size_t i = size; i > 0; i--) {
+        if (__haystack[i] == __needle[needle_len - check]) {
             check++;
+            if ((check == 2 && __needle[needle_len - (check + 1)] != '\n') ||
+                (check == 3 && __needle[needle_len - (check + 1)] != '\r')) {
+                return NULL;
+            }
+        } else {
+            check = 0;
         }
-        if (check == needle_len) return (find + i);
+        if (check == needle_len) return (char *)(__haystack + i);
     }
     return NULL;
 }

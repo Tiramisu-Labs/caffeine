@@ -93,12 +93,14 @@ int read_headers(int client_fd, headers_t *hdrs) {
         if (bytes_read > 0) {
             hdrs->bytes_read += bytes_read;
             hdrs->headers[hdrs->bytes_read] = '\0';
-            hdrs->headers_end = strstr(hdrs->headers, "\r\n\r\n");
+            hdrs->headers_end = find_headers_end(hdrs->headers, "\r\n\r\n", hdrs->bytes_read);
             if (hdrs->headers_end) {
+                if (hdrs->headers_end == hdrs->headers) return -1;
                 int i = 0;
                 int j = 0;
                 while (hdrs->headers[i] && hdrs->headers[i] != ' ') {
                     hdrs->method[j++] = hdrs->headers[i++];
+                    if (j == sizeof(hdrs->method)) return -1;
                 }
                 if (strcmp(hdrs->method, "GET") && strcmp(hdrs->method, "HEAD") &&
                     strcmp(hdrs->method, "DELETE") && strcmp(hdrs->method, "PUT") &&
@@ -117,6 +119,7 @@ int read_headers(int client_fd, headers_t *hdrs) {
                     hdrs->handler_name[j] = hdrs->headers[i];
                     i++;
                     j++;
+                    if (j == sizeof(hdrs->path) || j == sizeof(hdrs->handler_name)) return -1;
                 }
                 hdrs->handler_name[j] = 0;
                 if (hdrs->headers[i] == '?') {
@@ -125,6 +128,8 @@ int read_headers(int client_fd, headers_t *hdrs) {
                     while (hdrs->headers[i] && hdrs->headers[i] != ' ') {
                         hdrs->path[j++] = hdrs->headers[i++];
                         hdrs->query[k++] = hdrs->headers[i];
+                        if (j == sizeof(hdrs->path)) return -1;
+                        if (k == sizeof(hdrs->query)) return -1;
                     }
                     hdrs->query[k] = 0;
                 }
