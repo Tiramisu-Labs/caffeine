@@ -101,7 +101,7 @@ char* get_pid_path() {
     if (g_cfg.pid_path) return g_cfg.pid_path;
 
     size_t dir_len = strlen(PID_PATH);
-    size_t full_len = dir_len + strlen(g_cfg.instance_name) + strlen(PID_FILE_PREFIX) + strlen(PID_FILE_SUFFIX) + 1;
+    size_t full_len = dir_len + strlen(g_cfg.instance_name) + strlen(CAFFEINE_FILE_PREFIX) + strlen(PID_FILE_SUFFIX) + 1;
     
     char *path = malloc(full_len);
     if (path == NULL) return NULL;
@@ -117,7 +117,7 @@ char* get_pid_path() {
         }
     }
 
-    snprintf(path + dir_len, full_len - dir_len, "%s%s%s", PID_FILE_PREFIX, g_cfg.instance_name, PID_FILE_SUFFIX);
+    snprintf(path + dir_len, full_len - dir_len, "%s%s%s", CAFFEINE_FILE_PREFIX, g_cfg.instance_name, PID_FILE_SUFFIX);
     g_cfg.pid_path = path;
     return g_cfg.pid_path;
 }

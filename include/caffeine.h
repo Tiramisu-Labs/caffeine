@@ -22,7 +22,7 @@
 #define LOG_PATH "/.local/share/caffeine/"
 #define EXEC_PATH "/.config/caffeine/"
 #define PID_PATH "/tmp/"
-#define PID_FILE_PREFIX "caffeine_"
+#define CAFFEINE_FILE_PREFIX "caffeine_"
 #define PID_FILE_SUFFIX ".pid"
 
 typedef struct headers_s {

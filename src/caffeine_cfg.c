@@ -9,6 +9,8 @@
 #include <ctype.h>
 #include <fcntl.h>
 #include <deploy.h>
+#include <pwd.h>
+#include <dirent.h>
 
 #define MAX_LINE_LENGTH 256
 
@@ -18,7 +20,7 @@ void print_usage(const char *progname) {
     fprintf(stderr, "\nUsage: %s [OPTIONS]\n", progname);
     fprintf(stderr, "Caffeine: A high-performance pre-fork web server.\n\n");
     fprintf(stderr, "--- Instance Control ---\n");
-    fprintf(stderr, "  -n, --name <name>      Specify a unique instance name (MANDATORY for -d, -s, -l, -r).\n");
+    fprintf(stderr, "  -n, --name <name>      Specify a unique instance name (MANDATORY for -d, -s, -r).\n");
     fprintf(stderr, "  -D, --daemon           Run the specified instance in the background.\n");
     fprintf(stderr, "  -s, --stop             Send SIGTERM to stop the specified instance.\n");
     fprintf(stderr, "  -L, --list-instances   Show all running instances (by scanning PID files).\n");
@@ -34,8 +36,10 @@ void print_usage(const char *progname) {
     fprintf(stderr, "                         --path can be specified to change deploy directory.\n");
     fprintf(stderr, "\n--- Logging & Utilities ---\n");
     fprintf(stderr, "  -l, --log              Display the log file for the instance specified by -n.\n");
+    fprintf(stderr, "                         If no instance is provided, will list all the logs available.\n");
     fprintf(stderr, "  --log-level <level>    Set logging verbosity (DEBUG, INFO, WARN, ERROR) (default: %s).\n", DEFAULT_LOG_LEVEL);
     fprintf(stderr, "  --reset-logs           Clear the log file for the specified instance.\n");
+    fprintf(stderr, "  --delete-logs          Delete the log file for the specified instance.\n");
     fprintf(stderr, "  -h, --help             Display this help message and exit.\n");
     fprintf(stderr, "\n");
 }
@@ -49,23 +53,64 @@ static void reset_log_file() {
     close(fd);
 }
 
-static void display_log_file() {
-    int fd = open(get_log_path(), O_RDONLY);
-    if (fd < 0) {
-        fprintf(stderr, "%scaffeine: error: Could not open log file at %s: %s%s\n", COLOR_BRIGHT_RED, get_log_path(), strerror(errno), COLOR_RESET);
+static void display_all_logs() {
+    struct passwd *pw = getpwuid(getuid());
+    if (pw == NULL) return ;
+    
+    const char *log_dir_suffix = LOG_PATH;
+    size_t dir_len = strlen(pw->pw_dir) + strlen(log_dir_suffix);
+
+    char *path = malloc(dir_len);
+    if (path == NULL) return ;
+    
+    snprintf(path, dir_len + 1, "%s%s", pw->pw_dir, log_dir_suffix);
+    
+    DIR *dir;
+    struct dirent *entry;
+    int found_any = 0;
+
+    dir = opendir(path);
+    if (dir == NULL) {
+        fprintf(stderr, "ERROR: Could not open PID directory %s: %s\n", 
+                path, strerror(errno));
         return;
     }
 
-    char buffer[4096];
-    ssize_t bytes_read;
+    printf("--- Existing Caffeine Logs ---\n");
 
-    while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
-        if (write(STDOUT_FILENO, buffer, bytes_read) < 0) {
-            fprintf(stderr, "%scaffeine: error: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
-            break;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strstr(entry->d_name, ".log") != NULL) {
+            printf("  [LOG] %s\n", entry->d_name);
+            found_any++;
         }
     }
-    close(fd);
+
+    if (!found_any) printf("No Caffeine log found.\n");
+    closedir(dir);
+    free(path);
+}
+
+static void display_log_file() {
+    if (!g_cfg.instance_name) {
+        display_all_logs();
+    } else {
+        int fd = open(get_log_path(), O_RDONLY);
+        if (fd < 0) {
+            fprintf(stderr, "%scaffeine: error: Could not open log file at %s: %s%s\n", COLOR_BRIGHT_RED, get_log_path(), strerror(errno), COLOR_RESET);
+            return;
+        }
+    
+        char buffer[4096];
+        ssize_t bytes_read;
+    
+        while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
+            if (write(STDOUT_FILENO, buffer, bytes_read) < 0) {
+                fprintf(stderr, "%scaffeine: error: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
+                break;
+            }
+        }
+        close(fd);
+    }
 }
 
 void init_config()
@@ -174,7 +219,7 @@ int parse_arguments(int argc, char **argv) {
             g_cfg.exec_path = strdup(argv[i]);
         } else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--config") == 0) {
             CHECK_ARG(argv[i]);
-            if (read_config_file(arg) < 0) {
+            if (read_config_file(argv[i]) < 0) {
                 fprintf(stderr, "%scaffeine: error: configuration file%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
                 return -1;
             }
@@ -192,6 +237,8 @@ int parse_arguments(int argc, char **argv) {
             g_cfg.show_log = 1;
         } else if (strcmp(arg, "--reset-logs") == 0) {
             g_cfg.reset_logs = 1;
+        } else if (strcmp(arg, "--delete-logs") == 0) {
+            g_cfg.delete_logs = 1;
         } else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
             print_usage(argv[0]);
             return -1;
@@ -202,10 +249,10 @@ int parse_arguments(int argc, char **argv) {
         }
     }
     
-    if ((g_cfg.daemonize || g_cfg.stop_instance || g_cfg.show_log || g_cfg.reset_logs) && 
+    if ((g_cfg.daemonize || g_cfg.stop_instance || g_cfg.reset_logs || g_cfg.delete_logs) && 
         (g_cfg.instance_name == NULL || strcmp(g_cfg.instance_name, "caffeine_default") == 0)) 
     {
-        fprintf(stderr, "%scaffeine: error: commands -D, -s, -l, and --reset-logs require a unique instance name (-n <name>)%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
+        fprintf(stderr, "%scaffeine: error: commands -D, -s, --reset-logs and --delete-logs require a unique instance name (-n <name>)%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
         print_usage(argv[0]);
         return -1;
     }
@@ -214,6 +261,7 @@ int parse_arguments(int argc, char **argv) {
     if (!g_cfg.exec_path) g_cfg.exec_path = get_default_path();
     if (g_cfg.show_log) { display_log_file(); free_and_exit(EXIT_SUCCESS); }
     if (g_cfg.reset_logs) { reset_log_file(); free_and_exit(EXIT_SUCCESS); }
+    if (g_cfg.delete_logs) { printf("caffeine: log %s removed\n", get_log_path()); remove(get_log_path()); free_and_exit(EXIT_SUCCESS); }
     if (g_cfg.stop_instance) { stop_server(); free_and_exit(EXIT_SUCCESS); }
     if (g_cfg.list_instances) { list_running_instances(); free_and_exit(EXIT_SUCCESS);}
     set_log_level(g_cfg.log_level);

@@ -11,6 +11,7 @@ typedef struct {
     uint8_t     daemonize;
     uint8_t     show_log;
     uint8_t     reset_logs;
+    uint8_t     delete_logs;
     uint8_t     stop_instance;
     uint8_t     list_instances;
     uint8_t     deploy;

@@ -54,10 +54,10 @@ void list_running_instances() {
     printf("--- Running Caffeine Instances ---\n");
 
     while ((entry = readdir(dir)) != NULL) {
-        if (strstr(entry->d_name, PID_FILE_PREFIX) == entry->d_name &&
+        if (strstr(entry->d_name, CAFFEINE_FILE_PREFIX) == entry->d_name &&
             strstr(entry->d_name, PID_FILE_SUFFIX) != NULL) {
 
-            size_t name_start_len = strlen(PID_FILE_PREFIX);
+            size_t name_start_len = strlen(CAFFEINE_FILE_PREFIX);
             size_t name_end_len = strlen(PID_FILE_SUFFIX);
             size_t total_len = strlen(entry->d_name);
             size_t name_len = total_len - name_start_len - name_end_len;
