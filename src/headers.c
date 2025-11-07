@@ -8,9 +8,9 @@
 #include <stdlib.h>
 #include <ctype.h>
 
-static void struppercpy(char *__restrict __dest, const char *__restrict __src) {
+static void strupperncpy(char *__restrict __dest, const char *__restrict __src, size_t max_size) {
     int i = 0;
-    while (__src[i]) {
+    while (__src[i] && i < max_size) {
         __dest[i] = toupper(__src[i]);
         i++;
     }
@@ -47,9 +47,10 @@ int setup_cgi_environment(headers_t *hdrs, int max_strings, int max_length, char
                 envp[i] = env_buffer[i];
                 i++;
             } else {
-                strncpy(env_buffer[i], "HTTP_", 5);
-                struppercpy(env_buffer[i] + 5, key);
-                snprintf(env_buffer[i] + (strlen(env_buffer[i])), max_length, "=%s", value);
+                strncpy(env_buffer[i], "HTTP_", sizeof(env_buffer[i]));
+                strupperncpy(env_buffer[i] + 5, key, sizeof(env_buffer[i]) - 5);
+                size_t written_bytes = strlen(env_buffer[i]);
+                snprintf(env_buffer[i] + written_bytes, max_length - written_bytes, "=%s", value);
                 envp[i] = env_buffer[i];
                 i++;
             }

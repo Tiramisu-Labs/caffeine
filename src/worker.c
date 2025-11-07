@@ -11,7 +11,8 @@
 #include <fcntl.h>
 #include <ctype.h> 
 #include <errno.h> 
-#include <signal.h> 
+#include <signal.h>
+#include <limits.h> 
 
 #define MAX_ENV_STRINGS 128
 #define MAX_ENV_LENGTH 512
@@ -39,14 +40,6 @@ void worker_redirect_logs() {
     if (isatty(STDERR_FILENO)) freopen(log_path, "a", stderr); 
     
     LOG_INFO("Worker successfully forced redirection of STDOUT/STDERR to log file.");
-}
-
-static char* extract_token(const char *header, char terminator, char *buffer, size_t buf_size) {
-    const char *end = strchr(header, terminator);
-    if (!end || end - header >= buf_size) return NULL;
-    strncpy(buffer, header, end - header);
-    buffer[end - header] = '\0';
-    return buffer;
 }
 
 void handle_grand_child(int client_fd, int *stdin_pipe, headers_t *hdrs)
@@ -116,11 +109,17 @@ void handle_request(int client_fd) {
     char *content_length = strcasestr(hdrs.headers, "Content-Length");
     if (content_length) {
         char length_buffer[32];
-        if (!extract_token(content_length, ' ', length_buffer, sizeof(length_buffer))) {
+        const char *end = strchr(content_length, ' ');
+        if (!end || end - content_length >= sizeof(length_buffer)) {
             write(client_fd, BAD_REQUEST, strlen(BAD_REQUEST));
             return;
         }
-        hdrs.content_length = atoi(length_buffer);
+        strncpy(length_buffer, content_length, end - content_length);
+        length_buffer[end - content_length] = '\0';
+        hdrs.content_length = strtol(length_buffer, NULL, 10);
+        if (hdrs.content_length == LONG_MIN || hdrs.content_length == LONG_MAX) {
+            LOG_ERROR("error: %s", strerror(errno));
+        }
     }
     
     int stdin_pipe[2];
