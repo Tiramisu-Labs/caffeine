@@ -102,7 +102,7 @@ int read_headers(int client_fd, headers_t *hdrs) {
                 }
                 if (strcmp(hdrs->method, "GET") && strcmp(hdrs->method, "HEAD") &&
                     strcmp(hdrs->method, "DELETE") && strcmp(hdrs->method, "PUT") &&
-                    strcmp(hdrs->method, "POST")) {
+                    strcmp(hdrs->method, "POST") && strcmp(hdrs->method, "OPTIONS")) {
                         write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN);
                 }
                 i++; // skip space
