@@ -23,5 +23,7 @@ cmake .. -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX"
 # Build the project
 make
 
-echo "Build complete. To install, run 'make install' in the '$BUILD_DIR' directory."
+# Install
+make install
+
 echo "The program will be installed to: $INSTALL_PREFIX/bin"
