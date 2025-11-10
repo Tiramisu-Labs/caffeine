@@ -124,7 +124,7 @@ You need a $\\text{C}$ compiler ($\\text{gcc}$ or $\\text{clang}$) and a Unix-li
 
 * Make build.sh executable:
 ```
-  chmod \+x build.sh
+  chmod +x build.sh
 ```
 * Build and install:
 ```
