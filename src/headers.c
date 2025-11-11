@@ -96,6 +96,7 @@ int read_headers(int client_fd, headers_t *hdrs) {
             hdrs->headers[hdrs->bytes_read] = '\0';
             hdrs->headers_end = find_headers_end(hdrs->headers, "\r\n\r\n", hdrs->bytes_read);
             if (hdrs->headers_end) {
+                hdrs->headers_size = hdrs->headers_end - hdrs->headers + 4;
                 if (hdrs->headers_end == hdrs->headers) return -1;
                 int i = 0;
                 int j = 0;

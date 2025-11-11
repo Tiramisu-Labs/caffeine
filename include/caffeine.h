@@ -34,6 +34,7 @@ typedef struct headers_s {
     char    handler_name[32];
     char    content_type[256];
     char    *headers_end;
+    size_t  headers_size;
     size_t  content_length;
     size_t  bytes_read;
     uint8_t is_query;

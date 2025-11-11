@@ -13,10 +13,17 @@
 #include <errno.h> 
 #include <signal.h>
 #include <limits.h>
+#include <assert.h>
 #include <wasm.h> 
+#include <wasmtime.h>
 
 #define MAX_ENV_STRINGS 128
 #define MAX_ENV_LENGTH 512
+
+typedef struct {
+    wasm_engine_t* engine;
+    wasmtime_store_t* store;
+} WasmContext;
 
 void worker_redirect_logs() {
     char *log_path = get_log_path();
@@ -43,70 +50,153 @@ void worker_redirect_logs() {
     LOG_INFO("Worker successfully forced redirection of STDOUT/STDERR to log file.");
 }
 
-void handle_grand_child(int client_fd, int *stdin_pipe, headers_t *hdrs)
-{
-    LOG_DEBUG("Handler (PID %d): Headers read and terminated.", getpid());
-
-    char full_path[2048];
-    snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, hdrs->handler_name);
-
-    if (check_valid_path(client_fd, full_path) < 0) {
-        exit(EXIT_FAILURE);
-    }
-
-    char *interpreter = NULL;
-    char *handler_exec_path = full_path;
-    size_t name_len = strlen(hdrs->handler_name);
-    if (name_len > 3) {
-        if (strcmp(hdrs->handler_name + name_len - 3, ".py") == 0) interpreter = "python3";
-        else if (strcmp(hdrs->handler_name + name_len - 3, ".js") == 0) interpreter = "node";
-        else if (strcmp(hdrs->handler_name + name_len - 3, ".sh") == 0) interpreter = "bash";
-        else if (strcmp(hdrs->handler_name + name_len - 3, ".pl") == 0) interpreter = "perl";
-        else if (strcmp(hdrs->handler_name + name_len - 3, ".rb") == 0) interpreter = "ruby";
-        else if (name_len > 4 && strcmp(hdrs->handler_name + name_len - 4, ".php") == 0) interpreter = "php";
-    }
-    if (interpreter) handler_exec_path = interpreter;
-
-    LOG_DEBUG("Grandchild (PID %d): Executing '%s'.", getpid(), hdrs->path);
-    close(stdin_pipe[1]);
-    int dev_null = open("/dev/null", O_WRONLY);
-    if (dev_null < 0) { 
-        LOG_ERROR("open /dev/null: %s", strerror(errno));
-        exit(EXIT_FAILURE); 
-    }
-    dup2(dev_null, STDERR_FILENO);
-    close(dev_null);
-    dup2(stdin_pipe[0], STDIN_FILENO);
-    dup2(client_fd, STDOUT_FILENO); 
-    close(stdin_pipe[0]);
-    close(client_fd);
+static bool load_wasm_file_binary(const char* path, wasm_byte_vec_t* out) {
+    FILE* file = NULL;
+    struct stat stat_buf;
     
-    char env_buffer[MAX_ENV_STRINGS][MAX_ENV_LENGTH];
-    char *envp[MAX_ENV_STRINGS + 1];
-    setup_cgi_environment(hdrs, MAX_ENV_STRINGS, MAX_ENV_LENGTH, env_buffer, envp);
-
-    if (interpreter) {
-        char *const argv[] = {handler_exec_path, full_path, NULL};
-        execvpe(handler_exec_path, argv, envp);
+    if (stat(path, &stat_buf) != 0) {
+        return false;
     }
-    char *const argv[] = {handler_exec_path, hdrs->handler_name, NULL};
-    execvpe(handler_exec_path, argv, envp);
+    size_t file_size = (size_t)stat_buf.st_size;
+    
+    file = fopen(path, "rb");
+    if (!file) {
+        return false;
+    }
+
+    uint8_t* data = (uint8_t*)malloc(file_size);
+    if (!data) {
+        fclose(file);
+        return false;
+    }
+
+    if (fread(data, 1, file_size, file) != file_size) {
+        free(data);
+        fclose(file);
+        return false;
+    }
+    fclose(file);
+
+    out->size = file_size;
+    out->data = data;
+    return true;
 }
 
-void handle_request(int client_fd) {
-    int flags = fcntl(client_fd, F_GETFL, 0);
-    if (flags == -1) {
-        LOG_ERROR("FATAL: Worker failed to set fcntl(): %s", strerror(errno));
-        return ;
-    }
-    if (fcntl(client_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-        LOG_ERROR("FATAL: Worker failed to set fcntl(): %s", strerror(errno));
-        return ;
+int wasm_execute(
+    wasm_engine_t *engine, 
+    wasmtime_store_t *store, 
+    const char *wasm_path, 
+    const char *req_data, 
+    size_t req_len, 
+    char **res_data, 
+    size_t *res_len) 
+{
+    wasmtime_error_t *error = NULL;
+    wasm_trap_t *trap = NULL;
+    int execution_result = -1;
+
+    wasm_byte_vec_t binary;
+    if (!load_wasm_file_binary(wasm_path, &binary)) {
+        goto cleanup_exit;
     }
 
+    wasmtime_module_t *module = NULL;
+    error = wasmtime_module_new(engine, (uint8_t *)binary.data, binary.size, &module);
+    free(binary.data);
+    if (error) {
+        goto cleanup_exit;
+    }
+
+    wasmtime_instance_t instance;
+    
+    error = wasmtime_instance_new(wasmtime_store_context(store), module, NULL, 0, &instance, &trap); 
+    wasmtime_module_delete(module);
+    if (error || trap) {
+        if (trap) wasm_trap_delete(trap);
+        goto cleanup_exit;
+    }
+
+    wasmtime_extern_t item;
+    wasmtime_func_t handler_func;
+    wasmtime_memory_t memory;
+    bool ok;
+
+    ok = wasmtime_instance_export_get(wasmtime_store_context(store), &instance, "handle_request", 
+                                     strlen("handle_request"), &item);
+    if (!ok || item.kind != WASMTIME_EXTERN_FUNC) {
+        LOG_ERROR("WASM module does not export 'handle_request' function.");
+        goto cleanup_exit;
+    }
+    handler_func = item.of.func;
+
+    ok = wasmtime_instance_export_get(wasmtime_store_context(store), &instance, "memory", 
+                                     strlen("memory"), &item);
+    if (!ok || item.kind != WASMTIME_EXTERN_MEMORY) {
+        LOG_ERROR("WASM module does not export 'memory'.");
+        goto cleanup_exit;
+    }
+    memory = item.of.memory;
+    
+    char *wasm_memory_ptr = wasmtime_memory_data(wasmtime_store_context(store), &memory);
+    size_t mem_size = wasmtime_memory_data_size(wasmtime_store_context(store), &memory);
+    
+    const int32_t REQUEST_OFFSET = 1024; 
+    if (mem_size < REQUEST_OFFSET + req_len) {
+        LOG_ERROR("WASM memory too small for request data.");
+        goto cleanup_exit;
+    }
+    
+    memcpy(wasm_memory_ptr + REQUEST_OFFSET, req_data, req_len);
+
+    wasmtime_val_t args[2];
+    args[0].kind = WASMTIME_I32; args[0].of.i32 = REQUEST_OFFSET;
+    args[1].kind = WASMTIME_I32; args[1].of.i32 = (int32_t)req_len;
+
+    wasmtime_val_t results[1];
+    
+    error = wasmtime_func_call(wasmtime_store_context(store), &handler_func, args, 2, results, 1, &trap);
+
+    if (error || trap) {
+        if (trap) wasm_trap_delete(trap);
+        goto cleanup_exit;
+    }
+
+    int64_t packed_res = results[0].of.i64;
+    int32_t res_ptr = (int32_t)(packed_res >> 32);
+    *res_len = (int32_t)(packed_res & 0xFFFFFFFF);
+    
+    if ((size_t)res_ptr + *res_len > mem_size) {
+        LOG_ERROR("Wasm module returned invalid memory bounds.");
+        goto cleanup_exit;
+    }
+    
+    *res_data = (char*)malloc(*res_len);
+    if (!*res_data) {
+        LOG_ERROR("Failed to allocate host memory for result.");
+        goto cleanup_exit;
+    }
+    
+    memcpy(*res_data, wasm_memory_ptr + res_ptr, *res_len);
+    execution_result = 0;
+
+cleanup_exit:
+    if (error) wasmtime_error_delete(error);
+    return execution_result;
+}
+
+void handle_request(int client_fd, wasm_engine_t *engine, wasmtime_store_t *store) {
     headers_t hdrs = {0};
     if (read_headers(client_fd, &hdrs) < 0) return;
     
+    char full_wasm_path[2048];
+    snprintf(full_wasm_path, sizeof(full_wasm_path), "%s%s.wasm", g_cfg.exec_path, hdrs.handler_name);
+    
+    if (access(full_wasm_path, F_OK) == -1) {
+        write(client_fd, NOT_FOUND, NOT_FOUND_LEN);
+        return ;
+        LOG_ERROR("Wasm handler not found at: %s", full_wasm_path);
+    }
+
     char *content_length = strcasestr(hdrs.headers, "Content-Length");
     if (content_length) {
         char length_buffer[32];
@@ -122,79 +212,88 @@ void handle_request(int client_fd) {
             LOG_ERROR("error: %s", strerror(errno));
         }
     }
-    
-    int stdin_pipe[2];
-    if (pipe(stdin_pipe) < 0) {
-        LOG_ERROR("pipe: %s", strerror(errno));
-        return;
-    }
+    size_t total_payload_len = hdrs.content_length + hdrs.headers_size;
+    char *body_buffer = NULL;
+    if (hdrs.content_length > 0) {
+        body_buffer = (char*)malloc(hdrs.content_length);
+        if (!body_buffer) {
+            LOG_ERROR("Failed to allocate body buffer.");
+            return;
+        }
+        
+        ssize_t body_already_read = hdrs.bytes_read - (hdrs.headers_end - hdrs.headers) - 4;
+        ssize_t body_bytes_streamed = 0;
 
-    pid_t handler_pid = fork();
-    if (handler_pid < 0) {
-        LOG_ERROR("fork: %s", strerror(errno));
-        close(stdin_pipe[0]);
-        close(stdin_pipe[1]);
-        return;
-    }
-
-    if (handler_pid == 0) {
-        handle_grand_child(client_fd, stdin_pipe, &hdrs);
-        LOG_ERROR("execvpe: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    close(stdin_pipe[0]);
-    ssize_t body_already_read = hdrs.bytes_read - (hdrs.headers_end - hdrs.headers) - 4;
-    ssize_t body_bytes_streamed = 0;
-
-    if (body_already_read > 0) {
-        char *body_start = hdrs.headers_end + 4;
-        write(stdin_pipe[1], body_start, body_already_read);
-        body_bytes_streamed += body_already_read;
-    }
-    
-    ssize_t remaining = (ssize_t)(content_length - body_bytes_streamed);
-    
-    while (remaining > 0) {
-        struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
-        int poll_result = poll(&pfd, 1, 5000);
-
-        if (poll_result < 0) {
-            if (errno == EINTR) continue;
-            LOG_ERROR("poll failed during body stream: %s", strerror(errno));
-            break;
-        } else if (poll_result == 0) {
-            LOG_WARN("Client timeout mid-stream on FD %d. Sent %zd/%d bytes.", client_fd, body_bytes_streamed, content_length);
-            break;
+        if (body_already_read > 0) {
+            char *body_start = hdrs.headers_end + 4;
+            strncpy(body_buffer, hdrs.headers + hdrs.headers_size, hdrs.content_length);
+            body_bytes_streamed += body_already_read;
         }
 
-        char stream_buffer[4096];
-        ssize_t chunk_size = read(client_fd, stream_buffer, sizeof(stream_buffer));
+        ssize_t remaining = (ssize_t)(content_length - body_bytes_streamed);
+        
+        while (remaining > 0) {
+            struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
+            int poll_result = poll(&pfd, 1, 5000);
 
-        if (chunk_size > 0) {
-            if (write_fully(stdin_pipe[1], stream_buffer, chunk_size) < 0) {
-                LOG_ERROR("write to pipe failed: %s", strerror(errno));
+            if (poll_result < 0) {
+                if (errno == EINTR) continue;
+                LOG_ERROR("poll failed during body stream: %s", strerror(errno));
+                break;
+            } else if (poll_result == 0) {
+                LOG_WARN("Client timeout mid-stream on FD %d. Sent %zd/%d bytes.", client_fd, body_bytes_streamed, content_length);
                 break;
             }
-            body_bytes_streamed += chunk_size;
-            remaining -= chunk_size;
-        } else if (chunk_size == 0) {
-            break;
-        } else if (chunk_size < 0) {
-            if (errno == EINTR) continue;
-            LOG_ERROR("read failed during body stream: %s", strerror(errno));
-            break;
+
+            char stream_buffer[4096];
+            ssize_t chunk_size = read(client_fd, stream_buffer, sizeof(stream_buffer));
+
+            if (chunk_size > 0) {
+                strncpy(body_buffer + body_bytes_streamed, stream_buffer, remaining);
+                body_bytes_streamed += chunk_size;
+                remaining -= chunk_size;
+            } else if (chunk_size == 0) {
+                break;
+            } else if (chunk_size < 0) {
+                if (errno == EINTR) continue;
+                LOG_ERROR("read failed during body stream: %s", strerror(errno));
+                break;
+            }
         }
     }
+
+    char *wasm_res_data = NULL;
+    size_t wasm_res_len = 0;
     
-    close(stdin_pipe[1]);
-    close(client_fd);
-    // waitpid(handler_pid, NULL, 0);
-    LOG_DEBUG("Handler (PID %d): FD %d handed off to child (PID %d). Returning to service loop.", getpid(), client_fd, handler_pid);
+    int result = wasm_execute(
+        engine, 
+        store,
+        full_wasm_path, 
+        body_buffer,
+        hdrs.content_length,
+        &wasm_res_data, 
+        &wasm_res_len);
+        
+    if (body_buffer) free(body_buffer);
+
+    if (result != 0 || wasm_res_data == NULL) {
+        write(client_fd, INTERNAL_ERROR, INTERNAL_ERROR_LEN);
+        return;
+    }
+
+    printf("wasm res_data %s\n", wasm_res_data);
+    free(wasm_res_data); 
 }
 
 void exec_worker(int listen_fd) {
     if (g_cfg.daemonize) worker_redirect_logs();
+
+    wasm_engine_t* engine = wasm_engine_new();
+    assert(engine != NULL);
+
+    wasmtime_store_t *store = wasmtime_store_new(engine, NULL, NULL);
+    assert(store != NULL);
+    wasmtime_context_t *context = wasmtime_store_context(store);
 
     signal(SIGCHLD, SIG_IGN);
 
@@ -221,7 +320,7 @@ void exec_worker(int listen_fd) {
         LOG_INFO("Worker (PID %d) accepted connection from %s:%d on new FD %d.",
                 getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
 
-        handle_request(client_fd);
+        handle_request(client_fd, engine, store);
         
         if (close(client_fd) < 0) {
             if (errno == EBADF) {
