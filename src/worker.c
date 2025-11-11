@@ -12,7 +12,8 @@
 #include <ctype.h> 
 #include <errno.h> 
 #include <signal.h>
-#include <limits.h> 
+#include <limits.h>
+#include <wasm.h> 
 
 #define MAX_ENV_STRINGS 128
 #define MAX_ENV_LENGTH 512
