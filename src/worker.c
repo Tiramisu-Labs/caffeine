@@ -75,22 +75,18 @@ static bool load_wasm_file_binary(const char* path, wasm_byte_vec_t* out) {
     return true;
 }
 
-/* module cache lookup and update */
 static wasmtime_module_t* get_cached_module(wasm_engine_t *engine, const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return NULL;
 
-    /* search cache */
     for (int i = 0; i < MODULE_CACHE_SIZE; i++) {
         if (g_module_cache[i].module && strcmp(g_module_cache[i].path, path) == 0) {
             if (g_module_cache[i].mtime == st.st_mtime) return g_module_cache[i].module;
-            /* file changed: delete old module */
             wasmtime_module_delete(g_module_cache[i].module);
             g_module_cache[i].module = NULL;
         }
     }
 
-    /* compile module */
     wasm_byte_vec_t binary;
     if (!load_wasm_file_binary(path, &binary)) return NULL;
 
@@ -100,7 +96,6 @@ static wasmtime_module_t* get_cached_module(wasm_engine_t *engine, const char *p
     if (err) { wasmtime_error_delete(err); return NULL; }
     if (!module) return NULL;
 
-    /* store in first empty slot */
     for (int i = 0; i < MODULE_CACHE_SIZE; i++) {
         if (!g_module_cache[i].module) {
             strncpy(g_module_cache[i].path, path, sizeof(g_module_cache[i].path)-1);
@@ -112,7 +107,6 @@ static wasmtime_module_t* get_cached_module(wasm_engine_t *engine, const char *p
     return module;
 }
 
-/* helper: read exactly N bytes */
 static ssize_t read_exact(int fd, char *buf, size_t n) {
     size_t total = 0;
     while (total < n) {
@@ -127,8 +121,8 @@ static ssize_t read_exact(int fd, char *buf, size_t n) {
 }
 
 int wasm_execute(wasm_engine_t *engine, const char *wasm_path,
-                 const char *req_data, size_t req_len,
-                 char **res_data, size_t *res_len)
+                const char *req_data, size_t req_len,
+                char **res_data, size_t *res_len)
 {
     *res_data = NULL; *res_len = 0;
 
@@ -144,11 +138,9 @@ int wasm_execute(wasm_engine_t *engine, const char *wasm_path,
     bool ok;
     wasmtime_extern_t item;
 
-    /* instantiate */
     err = wasmtime_instance_new(ctx, module, NULL, 0, &instance, &trap);
     if (err || trap) { if(err) wasmtime_error_delete(err); if(trap) wasm_trap_delete(trap); wasmtime_store_delete(store); return -1; }
 
-    /* exports */
     ok = wasmtime_instance_export_get(ctx, &instance, "memory", strlen("memory"), &item);
     if(!ok || item.kind != WASMTIME_EXTERN_MEMORY) { wasmtime_store_delete(store); return -1; }
     wasmtime_memory_t memory = item.of.memory;
@@ -165,20 +157,17 @@ int wasm_execute(wasm_engine_t *engine, const char *wasm_path,
     if(!ok || item.kind != WASMTIME_EXTERN_FUNC) { wasmtime_store_delete(store); return -1; }
     wasmtime_func_t handle_fn = item.of.func;
 
-    /* alloc guest memory */
     wasmtime_val_t alloc_args[1] = { {.kind=WASMTIME_I32, .of.i32=(int32_t)req_len} };
     wasmtime_val_t alloc_res[1];
     err = wasmtime_func_call(ctx, &alloc_fn, alloc_args, 1, alloc_res, 1, &trap);
     if(err || trap) { if(err) wasmtime_error_delete(err); if(trap) wasm_trap_delete(trap); wasmtime_store_delete(store); return -1; }
     int32_t guest_ptr = alloc_res[0].of.i32;
 
-    /* copy request into guest memory */
     uint8_t *mem_data = wasmtime_memory_data(ctx, &memory);
     size_t mem_size = wasmtime_memory_data_size(ctx, &memory);
     if ((uint64_t)guest_ptr + req_len > mem_size) { wasmtime_store_delete(store); return -1; }
     memcpy(mem_data + guest_ptr, req_data, req_len);
 
-    /* call handle_request */
     wasmtime_val_t handle_args[2] = { {.kind=WASMTIME_I32,.of.i32=guest_ptr}, {.kind=WASMTIME_I32,.of.i32=(int32_t)req_len} };
     wasmtime_val_t handle_res[1];
     err = wasmtime_func_call(ctx, &handle_fn, handle_args, 2, handle_res, 1, &trap);

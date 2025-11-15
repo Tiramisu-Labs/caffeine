@@ -1,0 +1,74 @@
+<?xml version='1.0' encoding='utf8'?>
+<nuitka-compilation-report nuitka_version="2.6.2" nuitka_commercial_version="not installed" completion="exception">
+  <exception exception_type="AssertionError" exception_value="math.integer">
+Traceback (most recent call last):
+  File "/home/mcipolla/.local/lib/python3.15/site-packages/nuitka/MainControl.py", line 1127, in main
+    _main()
+    ~~~~~^^
+  File "/home/mcipolla/.local/lib/python3.15/site-packages/nuitka/MainControl.py", line 970, in _main
+    main_module = _createMainModule()
+  File "/home/mcipolla/.local/lib/python3.15/site-packages/nuitka/MainControl.py", line 146, in _createMainModule
+    main_module = buildMainModuleTree(
+        filename=main_filenames[0],
+        source_code=None,
+    )
+  File "/home/mcipolla/.local/lib/python3.15/site-packages/nuitka/tree/Building.py", line 1208, in buildMainModuleTree
+    module.setStandardLibraryModules(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        early_module_names=detectEarlyImports(),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        stdlib_modules_names=detectStdlibAutoInclusionModules(),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/mcipolla/.local/lib/python3.15/site-packages/nuitka/nodes/ModuleNodes.py", line 951, in setStandardLibraryModules
+    assert finding != "not-found", early_module_name
+           ^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: math.integer
+</exception>
+  <performance>
+    <memory_usage name="after_launch" value="46436352" />
+  </performance>
+  <data_composer blob_size="None" />
+  <command_line>
+    <option value="test_files/test.py" />
+    <option value="--standalone" />
+    <option value="--static-libpython=yes" />
+    <option value="--disable-ccache" />
+    <option value="-output-dir=py2wasm" />
+    <option value="--output-filename=test.wasm" />
+    <option value="--remove-output" />
+  </command_line>
+  <plugins>
+    <plugin name="anti-bloat" user_enabled="no" />
+    <plugin name="data-files" user_enabled="no" />
+    <plugin name="delvewheel" user_enabled="no" />
+    <plugin name="dll-files" user_enabled="no" />
+    <plugin name="eventlet" user_enabled="no" />
+    <plugin name="gevent" user_enabled="no" />
+    <plugin name="gi" user_enabled="no" />
+    <plugin name="glfw" user_enabled="no" />
+    <plugin name="implicit-imports" user_enabled="no" />
+    <plugin name="kivy" user_enabled="no" />
+    <plugin name="matplotlib" user_enabled="no" />
+    <plugin name="multiprocessing" user_enabled="no" />
+    <plugin name="options-nanny" user_enabled="no" />
+    <plugin name="pbr-compat" user_enabled="no" />
+    <plugin name="pkg-resources" user_enabled="no" />
+    <plugin name="pywebview" user_enabled="no" />
+    <plugin name="transformers" user_enabled="no" />
+  </plugins>
+  <distributions />
+  <python python_exe="${sys.prefix}/bin/python3.15" python_flavor="Unknown" python_version="3.15.0" os_name="Linux" arch_name="x86_64">
+    <search_path>
+      <path value="${cwd}" />
+      <path value="${cwd}/test_files" />
+      <path value="~/.local/bin" />
+      <path value="${sys.prefix}/lib/python3.15" />
+      <path value="${sys.prefix}/lib/python3.15/lib-dynload" />
+      <path value="~/.local/lib/python3.15/site-packages" />
+      <path value="${sys.prefix}/lib/python3.15/site-packages" />
+    </search_path>
+  </python>
+  <output run_filename="${cwd}/test.dist/test.wasm" />
+</nuitka-compilation-report>
