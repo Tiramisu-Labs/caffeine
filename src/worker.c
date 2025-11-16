@@ -50,7 +50,7 @@ void* timeout_thread(void *args)
             }
             usleep(1000);
         }
-        pthread_mutex_lock(&(monitor->mutex));
+        pthread_mutex_unlock(&(monitor->mutex));
     }
 }
 
@@ -163,6 +163,7 @@ void handle_request(int client_fd, monitor_t *monitor) {
     pthread_mutex_unlock(&monitor->mutex);
     char *result = handler(hdrs.headers);
     monitor->status = 1;
+    pthread_mutex_lock(&monitor->mutex);
 
     char header[256];
     int body_len = strlen(result);
@@ -185,9 +186,10 @@ void exec_worker(int listen_fd) {
 
     pthread_t thread;
     monitor_t timeout;
-    if (pthread_mutex_init(&timeout.mutex, NULL)) {
+    if (pthread_mutex_init(&timeout.mutex, NULL) != 0) {
         // error
     }
+    pthread_mutex_lock(&(timeout.mutex));
     if (pthread_create(&thread, NULL, timeout_thread, &timeout) != 0) {
         perror("pthread_create failed");
         exit(1);

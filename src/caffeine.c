@@ -13,40 +13,50 @@
 #include <time.h>
 #include <pthread.h>
 
+pthread_mutex_t scaler_mutex;
+
 void increase_worker_number() {
+    pthread_mutex_lock(&scaler_mutex);
     pid_t pid = fork();
-        
+    
     if (pid < 0) {
-        fprintf(stderr, "%scaffeine: error: fork: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
+        LOG_ERROR("caffeine: error: fork: %s\n", strerror(errno));
     }
     
     if (pid == 0) {
-        fprintf(stdout, "caffeine: worker process started (PID %d)\n", getpid());
-        g_cfg.workers_pid[g_cfg.current_workers] = pid;
-        g_cfg.current_workers++;
+        LOG_INFO("caffeine: worker process started (PID %d)\n", getpid());
+        pthread_mutex_unlock(&scaler_mutex);
         exec_worker(g_cfg.listen_fd);
         exit(EXIT_FAILURE); 
-    } 
-}
-
-void decrese_worker_number() {
-    g_cfg.current_workers--;
-    kill(g_cfg.workers_pid[g_cfg.current_workers], SIGTERM);
+    } else {
+        g_cfg.workers_pid[g_cfg.current_workers] = pid;
+        g_cfg.current_workers++;
+        pthread_mutex_unlock(&scaler_mutex);
+    }
 }
 
 void respawn_worker(pid_t pid) {
-    for (int i = 0; i < g_cfg.max_workers; i++) {
+    pthread_mutex_lock(&scaler_mutex);
+    for (int i = 0; i < g_cfg.current_workers; i++) {
         if (g_cfg.workers_pid[i] == pid) {
+            
             pid_t worker_pid = fork();
             if (worker_pid == 0) {
+                pthread_mutex_unlock(&scaler_mutex);
                 LOG_INFO("caffeine: worker process started (PID %d)\n", getpid());
                 exec_worker(g_cfg.listen_fd);
                 exit(EXIT_FAILURE); 
             }
-            g_cfg.workers_pid[i] = worker_pid;
+
+            if (worker_pid > 0) {
+                g_cfg.workers_pid[i] = worker_pid;
+                LOG_INFO("caffeine: worker PID %d respawned as %d", pid, worker_pid);
+            }
+            
             break;
         }
     }
+    pthread_mutex_unlock(&scaler_mutex);
 }
 
 int read_proc_stat(pid_t pid, proc_stats_t *stat) {
@@ -111,60 +121,98 @@ long read_total_jiffies() {
     return user + nice + system + idle + iowait + irq + softirq + steal;
 }
 
+void remove_worker_by_pid(pid_t pid_to_kill) {
+    for (int i = 0; i < g_cfg.current_workers; i++) {
+        if (g_cfg.workers_pid[i] == pid_to_kill) {
+            int last_index = g_cfg.current_workers - 1;
+            
+            if (i != last_index) {
+                g_cfg.workers_pid[i] = g_cfg.workers_pid[last_index];
+            }
+            
+            g_cfg.current_workers--;
+            return;
+        }
+    }
+    LOG_WARN("caffeine: Attempted to remove non-existent worker PID %d from array.", pid_to_kill);
+}
+
 void* scaler_thread(void *arg) {
     const int memory_threshold = 500*1024;
+    const double CPU_UP_THRESHOLD = 80.0;
+    const double CPU_DOWN_THRESHOLD = 30.0;
 
     for (;;) {
+        pthread_mutex_lock(&scaler_mutex);
         for (int i = g_cfg.dead_workers_idx - 1; i >= 0; i--) {
-            respawn_worker(g_cfg.dead_workers[i]);
+            pid_t dead_pid = g_cfg.dead_workers[i];
+            pthread_mutex_unlock(&scaler_mutex);
+            respawn_worker(dead_pid);
+            
+            pthread_mutex_lock(&scaler_mutex);
             g_cfg.dead_workers_idx--;
         }
+        pthread_mutex_unlock(&scaler_mutex);
 
         long total_jiffies1 = read_total_jiffies();
 
+        pthread_mutex_lock(&scaler_mutex);
         int current_workers = g_cfg.current_workers;
-        int decrease_flag = 0;
+        pid_t pids[current_workers];
+        memcpy(pids, g_cfg.workers_pid, current_workers * sizeof(pid_t));
+        pthread_mutex_unlock(&scaler_mutex);
 
         proc_stats_t stat1[current_workers];
-        proc_stats_t stat2[current_workers];
-
-    
+        
         for (int i = 0; i < current_workers; i++) {
-            read_proc_stat(g_cfg.workers_pid[i], &stat1[i]);
+            read_proc_stat(pids[i], &stat1[i]);
         }
-        sleep(1);
+        sleep(2);
 
         long total_jiffies2 = read_total_jiffies();
+        proc_stats_t stat2[current_workers];
+
+        pid_t candidate_to_kill = 0;
 
         for (int i = 0; i < current_workers; i++) {
-            read_proc_stat(g_cfg.workers_pid[i], &stat2[i]);
+            
+            read_proc_stat(pids[i], &stat2[i]);
 
             long delta_worker = (stat2[i].utime + stat2[i].stime) - (stat1[i].utime + stat1[i].stime);
-            float cpu_percent = 100.0 * delta_worker / (float)(total_jiffies2 - total_jiffies1);
+            long delta_jiffies = total_jiffies2 - total_jiffies1;
 
-            long mem_kb = read_proc_mem(g_cfg.workers_pid[i]);
+            double cpu_percent = 0.0;
+            if (delta_jiffies > 0) {
+                 cpu_percent = 100.0 * (double)delta_worker / (float)delta_jiffies;
+            }
 
-            if (cpu_percent > 80.0) {
-                LOG_WARN("worker %d overloaded: %.1f%% CPU", g_cfg.workers_pid[i], cpu_percent);
-                if (current_workers < g_cfg.max_workers) {
-                    LOG_INFO("spawning new worker");
-                    increase_worker_number();
-                } else {
-                    LOG_WARN("workers limits reached, no new worker will be spawned");
-                }
+            long mem_kb = read_proc_mem(pids[i]);
+            
+            // printf("CPU%%: %f\n", cpu_percent);
+            if (cpu_percent > CPU_UP_THRESHOLD) {
+                LOG_WARN("caffeine: worker %d overloaded: %.1f%% CPU", pids[i], cpu_percent);
+                increase_worker_number(); 
             }
 
             if (mem_kb > memory_threshold) {
-                LOG_WARN("worker %d memory threshold reached, restarting it", g_cfg.workers_pid[i]);
-                respawn_worker(g_cfg.workers_pid[i]);
+                LOG_WARN("caffeine: worker %d memory threshold reached, restarting it", pids[i]);
+                respawn_worker(pids[i]);
             }
 
-            if (cpu_percent < 30.0 && g_cfg.current_workers > g_cfg.min_workers) {
-                decrease_flag = 1;
+            if (candidate_to_kill == 0 && cpu_percent < CPU_DOWN_THRESHOLD && current_workers > g_cfg.min_workers) {
+                 candidate_to_kill = pids[i];
             }
         }
-        if (decrease_flag) decrese_worker_number();
-        usleep(1000000);
+
+        if (candidate_to_kill != 0) {
+            LOG_INFO("caffeine: Reducing worker pool by killing PID %d.", candidate_to_kill);
+            
+            kill(candidate_to_kill, SIGTERM);
+
+            pthread_mutex_lock(&scaler_mutex);
+            remove_worker_by_pid(candidate_to_kill); 
+            pthread_mutex_unlock(&scaler_mutex);
+        }
     }
 }
 
@@ -256,6 +304,10 @@ int main(int argc, char **argv) {
         LOG_ERROR("Failed to initialize signals: %s. exiting...", strerror(errno));
         for (int i = 0; i < g_cfg.min_workers; i++) kill(g_cfg.workers_pid[i], SIGTERM);
         free_and_exit(EXIT_FAILURE);
+    }
+
+    if (pthread_mutex_init(&scaler_mutex, NULL) != 0) {
+
     }
 
     pthread_t thread;
