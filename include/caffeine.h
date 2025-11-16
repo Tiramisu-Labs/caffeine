@@ -40,6 +40,7 @@ typedef struct headers_s {
 }   headers_t;
 
 extern pid_t *g_worker_pids;
+typedef char* (*handler_func)(void *req);
 
 void exec_worker(int listen_fd);
 void daemonize();

@@ -13,9 +13,7 @@
 #include <errno.h> 
 #include <signal.h>
 #include <limits.h> 
-
-#define MAX_ENV_STRINGS 128
-#define MAX_ENV_LENGTH 512
+#include <dlfcn.h>
 
 void worker_redirect_logs() {
     char *log_path = get_log_path();
@@ -40,56 +38,6 @@ void worker_redirect_logs() {
     if (isatty(STDERR_FILENO)) freopen(log_path, "a", stderr); 
     
     LOG_INFO("Worker successfully forced redirection of STDOUT/STDERR to log file.");
-}
-
-void handle_grand_child(int client_fd, int *stdin_pipe, headers_t *hdrs)
-{
-    LOG_DEBUG("Handler (PID %d): Headers read and terminated.", getpid());
-
-    char full_path[2048];
-    snprintf(full_path, sizeof(full_path), "%s%s", g_cfg.exec_path, hdrs->handler_name);
-
-    if (check_valid_path(client_fd, full_path) < 0) {
-        exit(EXIT_FAILURE);
-    }
-
-    char *interpreter = NULL;
-    char *handler_exec_path = full_path;
-    size_t name_len = strlen(hdrs->handler_name);
-    if (name_len > 3) {
-        if (strcmp(hdrs->handler_name + name_len - 3, ".py") == 0) interpreter = "python3";
-        else if (strcmp(hdrs->handler_name + name_len - 3, ".js") == 0) interpreter = "node";
-        else if (strcmp(hdrs->handler_name + name_len - 3, ".sh") == 0) interpreter = "bash";
-        else if (strcmp(hdrs->handler_name + name_len - 3, ".pl") == 0) interpreter = "perl";
-        else if (strcmp(hdrs->handler_name + name_len - 3, ".rb") == 0) interpreter = "ruby";
-        else if (name_len > 4 && strcmp(hdrs->handler_name + name_len - 4, ".php") == 0) interpreter = "php";
-    }
-    if (interpreter) handler_exec_path = interpreter;
-
-    LOG_DEBUG("Grandchild (PID %d): Executing '%s'.", getpid(), hdrs->path);
-    close(stdin_pipe[1]);
-    int dev_null = open("/dev/null", O_WRONLY);
-    if (dev_null < 0) { 
-        LOG_ERROR("open /dev/null: %s", strerror(errno));
-        exit(EXIT_FAILURE); 
-    }
-    dup2(dev_null, STDERR_FILENO);
-    close(dev_null);
-    dup2(stdin_pipe[0], STDIN_FILENO);
-    dup2(client_fd, STDOUT_FILENO); 
-    close(stdin_pipe[0]);
-    close(client_fd);
-    
-    char env_buffer[MAX_ENV_STRINGS][MAX_ENV_LENGTH];
-    char *envp[MAX_ENV_STRINGS + 1];
-    setup_cgi_environment(hdrs, MAX_ENV_STRINGS, MAX_ENV_LENGTH, env_buffer, envp);
-
-    if (interpreter) {
-        char *const argv[] = {handler_exec_path, full_path, NULL};
-        execvpe(handler_exec_path, argv, envp);
-    }
-    char *const argv[] = {handler_exec_path, hdrs->handler_name, NULL};
-    execvpe(handler_exec_path, argv, envp);
 }
 
 void handle_request(int client_fd) {
@@ -122,80 +70,69 @@ void handle_request(int client_fd) {
         }
     }
     
-    int stdin_pipe[2];
-    if (pipe(stdin_pipe) < 0) {
-        LOG_ERROR("pipe: %s", strerror(errno));
-        return;
-    }
+    if (hdrs.content_length > 0) {
+        ssize_t remaining = (ssize_t)(content_length - ( hdrs.bytes_read - (hdrs.headers_end - hdrs.headers) - 4));
+        while (remaining > 0) {
+            struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
+            int poll_result = poll(&pfd, 1, 5000);
 
-    pid_t handler_pid = fork();
-    if (handler_pid < 0) {
-        LOG_ERROR("fork: %s", strerror(errno));
-        close(stdin_pipe[0]);
-        close(stdin_pipe[1]);
-        return;
-    }
-
-    if (handler_pid == 0) {
-        handle_grand_child(client_fd, stdin_pipe, &hdrs);
-        LOG_ERROR("execvpe: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    close(stdin_pipe[0]);
-    ssize_t body_already_read = hdrs.bytes_read - (hdrs.headers_end - hdrs.headers) - 4;
-    ssize_t body_bytes_streamed = 0;
-
-    if (body_already_read > 0) {
-        char *body_start = hdrs.headers_end + 4;
-        write(stdin_pipe[1], body_start, body_already_read);
-        body_bytes_streamed += body_already_read;
-    }
-    
-    ssize_t remaining = (ssize_t)(content_length - body_bytes_streamed);
-    
-    while (remaining > 0) {
-        struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
-        int poll_result = poll(&pfd, 1, 5000);
-
-        if (poll_result < 0) {
-            if (errno == EINTR) continue;
-            LOG_ERROR("poll failed during body stream: %s", strerror(errno));
-            break;
-        } else if (poll_result == 0) {
-            LOG_WARN("Client timeout mid-stream on FD %d. Sent %zd/%d bytes.", client_fd, body_bytes_streamed, content_length);
-            break;
-        }
-
-        char stream_buffer[4096];
-        ssize_t chunk_size = read(client_fd, stream_buffer, sizeof(stream_buffer));
-
-        if (chunk_size > 0) {
-            if (write_fully(stdin_pipe[1], stream_buffer, chunk_size) < 0) {
-                LOG_ERROR("write to pipe failed: %s", strerror(errno));
+            if (poll_result < 0) {
+                if (errno == EINTR) continue;
+                LOG_ERROR("poll failed during body stream: %s", strerror(errno));
+                break;
+            } else if (poll_result == 0) {
+                LOG_WARN("something went wrong while reading the body");
                 break;
             }
-            body_bytes_streamed += chunk_size;
-            remaining -= chunk_size;
-        } else if (chunk_size == 0) {
-            break;
-        } else if (chunk_size < 0) {
-            if (errno == EINTR) continue;
-            LOG_ERROR("read failed during body stream: %s", strerror(errno));
-            break;
-        }
+            
+            ssize_t chunk_size = read(client_fd, hdrs.headers + hdrs.bytes_read, sizeof(hdrs.headers) - hdrs.bytes_read);
+
+            if (chunk_size > 0) {
+                hdrs.bytes_read += chunk_size;
+                remaining -= chunk_size;
+                hdrs.headers[hdrs.bytes_read] = 0;
+            } else if (chunk_size == 0) {
+                break;
+            } else if (chunk_size < 0) {
+                if (errno == EINTR) continue;
+                LOG_ERROR("read failed during body stream: %s", strerror(errno));
+                break;
+            }
+        } 
     }
-    
-    close(stdin_pipe[1]);
-    close(client_fd);
-    // waitpid(handler_pid, NULL, 0);
-    LOG_DEBUG("Handler (PID %d): FD %d handed off to child (PID %d). Returning to service loop.", getpid(), client_fd, handler_pid);
+
+    char full_path[2048];
+    snprintf(full_path, sizeof(full_path), "%s%s.so", g_cfg.exec_path, hdrs.handler_name);
+    void *handle = dlopen(full_path, RTLD_NOW | RTLD_LOCAL);
+    handler_func handler = (handler_func)dlsym(handle, "handler");
+    if (!handler) {
+        LOG_ERROR("error: dlsym: %s\n", dlerror());
+        dlclose(handle);
+        return ;
+    }
+
+    char *result = handler(hdrs.headers);
+
+    char header[256];
+    int body_len = strlen(result);
+    int header_len = snprintf(header, sizeof(header),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Length: %d\r\n"
+        "Content-Type: application/json\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        body_len);
+
+    write(client_fd, header, header_len);
+    write(client_fd, result, body_len);
+
+    dlclose(handle);
 }
 
 void exec_worker(int listen_fd) {
     if (g_cfg.daemonize) worker_redirect_logs();
 
-    signal(SIGCHLD, SIG_IGN);
+    // signal(SIGCHLD, SIG_IGN);
 
     LOG_INFO("Worker (PID %d) is running and listening on shared FD %d.", getpid(), listen_fd);
 
