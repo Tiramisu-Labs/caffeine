@@ -39,6 +39,12 @@ typedef struct headers_s {
     uint8_t is_query;
 }   headers_t;
 
+typedef struct proc_stats_s {
+    unsigned long utime;
+    unsigned long stime;
+    unsigned long starttime;
+}   proc_stats_t;
+
 extern pid_t *g_worker_pids;
 typedef char* (*handler_func)(void *req);
 

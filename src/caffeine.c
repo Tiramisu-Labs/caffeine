@@ -10,6 +10,163 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/types.h>
+#include <time.h>
+#include <pthread.h>
+
+void increase_worker_number() {
+    pid_t pid = fork();
+        
+    if (pid < 0) {
+        fprintf(stderr, "%scaffeine: error: fork: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
+    }
+    
+    if (pid == 0) {
+        fprintf(stdout, "caffeine: worker process started (PID %d)\n", getpid());
+        g_cfg.workers_pid[g_cfg.current_workers] = pid;
+        g_cfg.current_workers++;
+        exec_worker(g_cfg.listen_fd);
+        exit(EXIT_FAILURE); 
+    } 
+}
+
+void decrese_worker_number() {
+    g_cfg.current_workers--;
+    kill(g_cfg.workers_pid[g_cfg.current_workers], SIGTERM);
+}
+
+void respawn_worker(pid_t pid) {
+    for (int i = 0; i < g_cfg.max_workers; i++) {
+        if (g_cfg.workers_pid[i] == pid) {
+            pid_t worker_pid = fork();
+            if (worker_pid == 0) {
+                LOG_INFO("caffeine: worker process started (PID %d)\n", getpid());
+                exec_worker(g_cfg.listen_fd);
+                exit(EXIT_FAILURE); 
+            }
+            g_cfg.workers_pid[i] = worker_pid;
+            break;
+        }
+    }
+}
+
+int read_proc_stat(pid_t pid, proc_stats_t *stat) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) return -1;
+
+    char buffer[1024];
+    if (!fgets(buffer, sizeof(buffer), fp)) {
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+
+    char comm[256], state;
+    int res = sscanf(buffer,
+        "%*d %s %c %*d %*d %*d %*d %*d "
+        "%*u %*u %*u %*u %*u "
+        "%lu %lu %*d %*d %*d %*d %*d %*d %*d %lu",
+        comm, &state, &stat->utime, &stat->stime, &stat->starttime);
+
+    return (res == 5) ? 0 : -1;
+}
+
+long read_proc_mem(pid_t pid) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/status", pid);
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) return -1;
+
+    char line[256];
+    long rss_kb = -1;
+    while (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "VmRSS: %ld kB", &rss_kb) == 1) {
+            break;
+        }
+    }
+    fclose(fp);
+    return rss_kb;
+}
+
+long read_total_jiffies() {
+    FILE *fp = fopen("/proc/stat", "r");
+    if (!fp) return -1;
+
+    char line[512];
+    if (!fgets(line, sizeof(line), fp)) {
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+
+    long user, nice, system, idle, iowait, irq, softirq, steal;
+    if (sscanf(line, "cpu  %ld %ld %ld %ld %ld %ld %ld %ld",
+               &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal) < 8) {
+        return -1;
+    }
+
+    return user + nice + system + idle + iowait + irq + softirq + steal;
+}
+
+void* scaler_thread(void *arg) {
+    const int memory_threshold = 500*1024;
+
+    for (;;) {
+        for (int i = g_cfg.dead_workers_idx - 1; i >= 0; i--) {
+            respawn_worker(g_cfg.dead_workers[i]);
+            g_cfg.dead_workers_idx--;
+        }
+
+        long total_jiffies1 = read_total_jiffies();
+
+        int current_workers = g_cfg.current_workers;
+        int decrease_flag = 0;
+
+        proc_stats_t stat1[current_workers];
+        proc_stats_t stat2[current_workers];
+
+    
+        for (int i = 0; i < current_workers; i++) {
+            read_proc_stat(g_cfg.workers_pid[i], &stat1[i]);
+        }
+        sleep(1);
+
+        long total_jiffies2 = read_total_jiffies();
+
+        for (int i = 0; i < current_workers; i++) {
+            read_proc_stat(g_cfg.workers_pid[i], &stat2[i]);
+
+            long delta_worker = (stat2[i].utime + stat2[i].stime) - (stat1[i].utime + stat1[i].stime);
+            float cpu_percent = 100.0 * delta_worker / (float)(total_jiffies2 - total_jiffies1);
+
+            long mem_kb = read_proc_mem(g_cfg.workers_pid[i]);
+
+            if (cpu_percent > 80.0) {
+                LOG_WARN("worker %d overloaded: %.1f%% CPU", g_cfg.workers_pid[i], cpu_percent);
+                if (current_workers < g_cfg.max_workers) {
+                    LOG_INFO("spawning new worker");
+                    increase_worker_number();
+                } else {
+                    LOG_WARN("workers limits reached, no new worker will be spawned");
+                }
+            }
+
+            if (mem_kb > memory_threshold) {
+                LOG_WARN("worker %d memory threshold reached, restarting it", g_cfg.workers_pid[i]);
+                respawn_worker(g_cfg.workers_pid[i]);
+            }
+
+            if (cpu_percent < 30.0 && g_cfg.current_workers > g_cfg.min_workers) {
+                decrease_flag = 1;
+            }
+        }
+        if (decrease_flag) decrese_worker_number();
+        usleep(1000000);
+    }
+}
 
 pid_t *g_worker_pids = NULL;
 int main(int argc, char **argv) {
@@ -100,6 +257,13 @@ int main(int argc, char **argv) {
         for (int i = 0; i < g_cfg.min_workers; i++) kill(g_cfg.workers_pid[i], SIGTERM);
         free_and_exit(EXIT_FAILURE);
     }
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, scaler_thread, NULL) != 0) {
+        perror("pthread_create failed");
+        exit(1);
+    }
+    pthread_detach(thread);
 
     sigset_t oldmask, term_mask;
     if (sigemptyset(&term_mask) < 0 || sigaddset(&term_mask, SIGTERM) < 0 || sigaddset(&term_mask, SIGCHLD) < 0) {

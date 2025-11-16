@@ -124,6 +124,8 @@ void init_config()
     if (g_cfg.max_workers < 2) g_cfg.max_workers = 2;
     if (g_cfg.max_workers > 64) g_cfg.max_workers = 64;
     g_cfg.workers_pid = calloc(g_cfg.max_workers, sizeof(pid_t));
+    g_cfg.dead_workers = calloc(g_cfg.max_workers, sizeof(pid_t));
+    g_cfg.dead_workers_idx = 0;
 }
 
 static void parse_config_line(char *line, int line_number) {
@@ -269,6 +271,7 @@ int parse_arguments(int argc, char **argv) {
     if (g_cfg.delete_logs) { printf("caffeine: log %s removed\n", get_log_path()); remove(get_log_path()); free_and_exit(EXIT_SUCCESS); }
     if (g_cfg.stop_instance) { stop_server(); free_and_exit(EXIT_SUCCESS); }
     if (g_cfg.list_instances) { list_running_instances(); free_and_exit(EXIT_SUCCESS);}
+    g_cfg.current_workers = g_cfg.min_workers;
     set_log_level(g_cfg.log_level);
     return 0;
 }

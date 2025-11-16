@@ -17,10 +17,13 @@ typedef struct {
     uint8_t     list_instances;
     uint8_t     deploy;
     pid_t       *workers_pid;
+    pid_t       *dead_workers;
+    int         dead_workers_idx;
     int         listen_fd;
     int         port;
     int         max_workers;
     int         min_workers;
+    int         current_workers;
     char        *instance_name;
     char        *exec_path;
     char        *log_level;
