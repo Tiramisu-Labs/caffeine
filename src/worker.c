@@ -17,9 +17,10 @@
 #include <pthread.h>
 #include <time.h>
 
-#define TIMEOUT 2
+#define TIMEOUT -2
 
 typedef struct monitor_s {
+    char            *handler;
     unsigned int    timeout;
     int             status;
     struct timespec start;
@@ -44,6 +45,7 @@ void* timeout_thread(void *args)
                 break;
             } else if (elapsed_ms >= monitor->timeout && monitor->status == 0) {
                 write(monitor->client_fd, REQUEST_TIMEOUT, REQUEST_TIMEOUT_LEN);
+                LOG_WARN("killing worker %d, %s timeout", getpid(), monitor->handler);
                 exit(TIMEOUT);
             }
             usleep(1000);
@@ -153,7 +155,8 @@ void handle_request(int client_fd, monitor_t *monitor) {
     }
 
     clock_gettime(CLOCK_MONOTONIC, &(monitor->start));
-    monitor->timeout = 60000;
+    monitor->handler = hdrs.handler_name;
+    monitor->timeout = 6000;
     monitor->status = 0;
     monitor->client_fd = client_fd;
 

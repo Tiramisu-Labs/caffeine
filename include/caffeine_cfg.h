@@ -6,6 +6,7 @@
 #define DEFAULT_LOG_LEVEL "INFO"
 
 #include <inttypes.h>
+#include <sys/types.h>
 
 typedef struct {
     uint8_t     daemonize;
@@ -15,8 +16,11 @@ typedef struct {
     uint8_t     stop_instance;
     uint8_t     list_instances;
     uint8_t     deploy;
+    pid_t       *workers_pid;
+    int         listen_fd;
     int         port;
-    int         workers;
+    int         max_workers;
+    int         min_workers;
     char        *instance_name;
     char        *exec_path;
     char        *log_level;

@@ -27,21 +27,21 @@ int main(int argc, char **argv) {
         free_and_exit(EXIT_SUCCESS);
     }
 
-    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd < 0) {
+    g_cfg.listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (g_cfg.listen_fd < 0) {
         fprintf(stderr, "%scaffeine: error: socket: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
         free_and_exit(EXIT_FAILURE);
     }
 
     int enable = 1;
-    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
+    if (setsockopt(g_cfg.listen_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
         fprintf(stderr, "%scaffeine: error: setsockopt(SO_REUSEADDR): %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
-        close(listen_fd);
+        close(g_cfg.listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
-    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
+    if (setsockopt(g_cfg.listen_fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
         fprintf(stderr, "%scaffeine: error: setsockopt(SO_REUSEPORT) failed: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
-        close(listen_fd);
+        close(g_cfg.listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
     
@@ -51,15 +51,15 @@ int main(int argc, char **argv) {
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(g_cfg.port);
     
-    if (bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+    if (bind(g_cfg.listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         fprintf(stderr, "%scaffeine: error: failed to bind to port %d: %s%s\n", COLOR_BRIGHT_RED, g_cfg.port, strerror(errno), COLOR_RESET);
-        close(listen_fd);
+        close(g_cfg.listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
     
-    if (listen(listen_fd, 4096) < 0) {
+    if (listen(g_cfg.listen_fd, 4096) < 0) {
         fprintf(stderr, "%scaffeine: error: couldn't listen on port %d: %s%s\n", COLOR_BRIGHT_RED, g_cfg.port, strerror(errno), COLOR_RESET);
-        close(listen_fd);
+        close(g_cfg.listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
 
@@ -67,10 +67,15 @@ int main(int argc, char **argv) {
         fprintf(stdout, "%scaffeine: starting Caffeine server as a daemon...%s\n", COLOR_GREEN, COLOR_RESET);
         daemonize();
     }
-    fprintf(stdout, "caffeine: spawning %d worker processes...\n", g_cfg.workers);
+    fprintf(stdout, "caffeine: spawning %d worker processes...\n", g_cfg.min_workers);
 
-    pid_t worker_pids[g_cfg.workers];
-    for (int i = 0; i < g_cfg.workers; i++) {
+    if (g_cfg.min_workers > g_cfg.max_workers) {
+        fprintf(stdout, "%swarning: workers number set too high: maximum for your configuration: %d\n", COLOR_YELLOW, g_cfg.max_workers);
+        fprintf(stdout, "setting default workers accordingly%s\n", COLOR_RESET);
+        g_cfg.min_workers = g_cfg.max_workers;
+    }
+
+    for (int i = 0; i < g_cfg.min_workers; i++) {
         pid_t pid = fork();
         
         if (pid < 0) {
@@ -80,32 +85,32 @@ int main(int argc, char **argv) {
         
         if (pid == 0) {
             fprintf(stdout, "caffeine: worker process started (PID %d)\n", getpid());
-            exec_worker(listen_fd);
+            exec_worker(g_cfg.listen_fd);
             exit(EXIT_FAILURE); 
         } 
-        worker_pids[i] = pid;
+        g_cfg.workers_pid[i] = pid;
     }
     
-    close(listen_fd);
+    // close(g_cfg.listen_fd);
     
-    fprintf(stdout, "%scaffeine: server running with %d workers on port %d%s\n\n", COLOR_GREEN, g_cfg.workers, g_cfg.port, COLOR_RESET);
+    fprintf(stdout, "%scaffeine: server running with %d workers on port %d%s\n\n", COLOR_GREEN, g_cfg.min_workers, g_cfg.port, COLOR_RESET);
 
     if (sig_init() < 0) {
         LOG_ERROR("Failed to initialize signals: %s. exiting...", strerror(errno));
-        for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
+        for (int i = 0; i < g_cfg.min_workers; i++) kill(g_cfg.workers_pid[i], SIGTERM);
         free_and_exit(EXIT_FAILURE);
     }
 
     sigset_t oldmask, term_mask;
-    if (sigemptyset(&term_mask) < 0 || sigaddset(&term_mask, SIGTERM) < 0) {
+    if (sigemptyset(&term_mask) < 0 || sigaddset(&term_mask, SIGTERM) < 0 || sigaddset(&term_mask, SIGCHLD) < 0) {
         LOG_ERROR("sigset operations failed.");
-        for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
+        for (int i = 0; i < g_cfg.min_workers; i++) kill(g_cfg.workers_pid[i], SIGTERM);
         free_and_exit(EXIT_FAILURE);
     }
 
     if (sigprocmask(SIG_BLOCK, &term_mask, &oldmask) < 0) {
         LOG_ERROR("sigprocmask BLOCK failed.");
-        for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
+        for (int i = 0; i < g_cfg.min_workers; i++) kill(g_cfg.workers_pid[i], SIGTERM);
         free_and_exit(EXIT_FAILURE);
     }
 
@@ -114,7 +119,7 @@ int main(int argc, char **argv) {
     sigprocmask(SIG_SETMASK, &oldmask, NULL);
 
     LOG_INFO("Parent performing cleanup and exiting. Killing workers.");
-    for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
+    for (int i = 0; i < g_cfg.max_workers; i++) kill(g_cfg.workers_pid[i], SIGTERM);
     free_and_exit(EXIT_SUCCESS);
     return 0;
 }

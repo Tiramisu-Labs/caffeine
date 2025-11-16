@@ -117,8 +117,13 @@ void init_config()
 {
     memset(&g_cfg, 0, sizeof(config_t));
     g_cfg.port = DEFAULT_PORT;
-    g_cfg.workers = DEFAULT_WORKERS;
+    g_cfg.min_workers = DEFAULT_WORKERS;
     g_cfg.log_level = strdup(DEFAULT_LOG_LEVEL);
+    int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    g_cfg.max_workers = num_cores * 2;
+    if (g_cfg.max_workers < 2) g_cfg.max_workers = 2;
+    if (g_cfg.max_workers > 64) g_cfg.max_workers = 64;
+    g_cfg.workers_pid = calloc(g_cfg.max_workers, sizeof(pid_t));
 }
 
 static void parse_config_line(char *line, int line_number) {
@@ -144,8 +149,8 @@ static void parse_config_line(char *line, int line_number) {
         g_cfg.port = atoi(value);
         fprintf(stdout, "caffeine: config read: port = %d\n", g_cfg.port);
     } else if (strcmp(key, "workers") == 0) {
-        g_cfg.workers = atoi(value);
-        fprintf(stdout, "caffeine: config read: workers = %d\n", g_cfg.workers);
+        g_cfg.min_workers = atoi(value);
+        fprintf(stdout, "caffeine: config read: workers = %d\n", g_cfg.min_workers);
     } else if (strcmp(key, "log_level") == 0) {
         if (g_cfg.log_level) free(g_cfg.log_level);
         g_cfg.log_level = strdup(value);
@@ -209,7 +214,7 @@ int parse_arguments(int argc, char **argv) {
             g_cfg.port = atoi(argv[i]);
         } else if (strcmp(arg, "-w") == 0 || strcmp(arg, "--workers") == 0) {
             CHECK_ARG(arg);
-            g_cfg.workers = atoi(argv[i]);
+            g_cfg.min_workers = atoi(argv[i]);
         } else if (strcmp(arg, "--log-level") == 0) {
             CHECK_ARG(arg);
             free(g_cfg.log_level);

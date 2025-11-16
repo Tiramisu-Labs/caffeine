@@ -1,6 +1,7 @@
 #include <caffeine_sig.h>
 #include <caffeine_utils.h>
 #include <caffeine.h>
+#include <caffeine_cfg.h>
 #include <log.h>
 #include <pwd.h>
 #include <unistd.h>
@@ -48,13 +49,36 @@ void sigterm_handler(int signum) {
     }
 }
 
+void sigchld_handler(int signum) {
+    pid_t pid;
+    int status;
+
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        LOG_INFO("Worker %d exited", pid);
+        for (int i = 0; i < g_cfg.max_workers; i++) {
+            if (g_cfg.workers_pid[i] == pid) {
+                pid_t worker_pid = fork();
+                if (worker_pid == 0) {
+                    LOG_INFO("caffeine: worker process started (PID %d)\n", getpid());
+                    exec_worker(g_cfg.listen_fd);
+                    exit(EXIT_FAILURE); 
+                }
+                g_cfg.workers_pid[i] = pid;
+                break;
+            }
+        }
+    }
+}
+
 int sig_init()
 {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigterm_handler;
-    if (sigaction(SIGTERM, &sa, NULL) < 0) {
-        return -1;
-    }
+    if (sigaction(SIGTERM, &sa, NULL) < 0) return -1;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigchld_handler;
+    if (sigaction(SIGCHLD, &sa, NULL) < 0) return -1;
     return 0;
 }
