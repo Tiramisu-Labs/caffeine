@@ -14,12 +14,49 @@
 #include <signal.h>
 #include <limits.h> 
 #include <dlfcn.h>
+#include <pthread.h>
+#include <time.h>
+
+#define TIMEOUT 2
+
+typedef struct monitor_s {
+    unsigned int    timeout;
+    int             status;
+    struct timespec start;
+    pthread_mutex_t mutex;
+    int             client_fd;
+}   monitor_t;
+
+void* timeout_thread(void *args)
+{
+    monitor_t *monitor = (monitor_t *)args;
+    int running = 0;
+    for (;;) {
+        pthread_mutex_lock(&(monitor->mutex));
+        running = 1;
+        while(running) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            long elapsed_ms = (now.tv_sec - monitor->start.tv_sec) * 1000 + (now.tv_nsec - monitor->start.tv_nsec) / 1000000;
+
+            if (monitor->status == 1) {
+                running = 0;
+                break;
+            } else if (elapsed_ms >= monitor->timeout && monitor->status == 0) {
+                write(monitor->client_fd, REQUEST_TIMEOUT, REQUEST_TIMEOUT_LEN);
+                exit(TIMEOUT);
+            }
+            usleep(1000);
+        }
+        pthread_mutex_lock(&(monitor->mutex));
+    }
+}
 
 void worker_redirect_logs() {
     char *log_path = get_log_path();
     int log_fd;
     
-    log_fd = open(log_path, O_RDWR | O_CREAT | O_APPEND, 0644); 
+    log_fd = open(log_path, O_RDWR | O_CREAT | O_APPEND, 0644);
     
     if (log_fd < 0) {
         LOG_ERROR("FATAL: Worker failed to open log file %s: %s", log_path, strerror(errno));
@@ -40,7 +77,7 @@ void worker_redirect_logs() {
     LOG_INFO("Worker successfully forced redirection of STDOUT/STDERR to log file.");
 }
 
-void handle_request(int client_fd) {
+void handle_request(int client_fd, monitor_t *monitor) {
     int flags = fcntl(client_fd, F_GETFL, 0);
     if (flags == -1) {
         LOG_ERROR("FATAL: Worker failed to set fcntl(): %s", strerror(errno));
@@ -104,14 +141,25 @@ void handle_request(int client_fd) {
     char full_path[2048];
     snprintf(full_path, sizeof(full_path), "%s%s.so", g_cfg.exec_path, hdrs.handler_name);
     void *handle = dlopen(full_path, RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        LOG_ERROR("error: handler not found: %s", dlerror());
+        write(client_fd, NOT_FOUND, NOT_FOUND_LEN);
+    }
     handler_func handler = (handler_func)dlsym(handle, "handler");
     if (!handler) {
-        LOG_ERROR("error: dlsym: %s\n", dlerror());
+        LOG_ERROR("error: dlsym: %s", dlerror());
         dlclose(handle);
         return ;
     }
 
+    clock_gettime(CLOCK_MONOTONIC, &(monitor->start));
+    monitor->timeout = 60000;
+    monitor->status = 0;
+    monitor->client_fd = client_fd;
+
+    pthread_mutex_unlock(&monitor->mutex);
     char *result = handler(hdrs.headers);
+    monitor->status = 1;
 
     char header[256];
     int body_len = strlen(result);
@@ -132,6 +180,16 @@ void handle_request(int client_fd) {
 void exec_worker(int listen_fd) {
     if (g_cfg.daemonize) worker_redirect_logs();
 
+    pthread_t thread;
+    monitor_t timeout;
+    if (pthread_mutex_init(&timeout.mutex, NULL)) {
+        // error
+    }
+    if (pthread_create(&thread, NULL, timeout_thread, &timeout) != 0) {
+        perror("pthread_create failed");
+        exit(1);
+    }
+    pthread_detach(thread);
     // signal(SIGCHLD, SIG_IGN);
 
     LOG_INFO("Worker (PID %d) is running and listening on shared FD %d.", getpid(), listen_fd);
@@ -157,7 +215,7 @@ void exec_worker(int listen_fd) {
         LOG_INFO("Worker (PID %d) accepted connection from %s:%d on new FD %d.",
                 getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
 
-        handle_request(client_fd);
+        handle_request(client_fd, &timeout);
         
         if (close(client_fd) < 0) {
             if (errno == EBADF) {
