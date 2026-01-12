@@ -16,6 +16,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <time.h>
+#include <cJSON.h>
 
 #define TIMEOUT -2
 
@@ -79,110 +80,153 @@ void worker_redirect_logs() {
     LOG_INFO("Worker successfully forced redirection of STDOUT/STDERR to log file.");
 }
 
-void handle_request(int client_fd, monitor_t *monitor) {
+int load_handler(handler_entry_t *entry, const char *so_path, struct stat *st, unsigned long path_hash) {
+    if (entry->dl_handle) {
+        dlclose(entry->dl_handle);
+        if (entry->path) free(entry->path);
+    }
+
+    void *h = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
+    if (!h) {
+        LOG_ERROR("dlopen failed: %s", dlerror());
+        return -1;
+    }
+
+    handler_func f = (handler_func)dlsym(h, "handler");
+    if (!f) {
+        LOG_ERROR("Symbol 'handler' not found in %s", so_path);
+        dlclose(h);
+        return -1;
+    }
+
+    int *t_ptr = (int *)dlsym(h, "timeout_val");
+    
+    entry->dl_handle = h;
+    entry->func = f;
+    entry->path = strdup(so_path);
+    entry->hash = path_hash;
+    entry->last_mtime = st->st_mtime;
+    entry->timeout_ms = t_ptr ? *t_ptr : 5000; 
+
+    return 0;
+}
+
+handler_entry_t* get_handler_from_cache(handler_cache_t *cache, const char *handler_name, unsigned long path_hash) {
+    char full_path[1024];
+    snprintf(full_path, sizeof(full_path), "%s%s.so", g_cfg.exec_path, handler_name);
+
+    struct stat st;
+    if (stat(full_path, &st) < 0) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < cache->size; i++) {
+        if (cache->entries[i].hash == path_hash) {
+            if (cache->entries[i].last_mtime != st.st_mtime) {
+                if (load_handler(&cache->entries[i], full_path, &st, path_hash) != 0) return NULL;
+            }
+            return &cache->entries[i];
+        }
+    }
+
+    if (cache->size >= cache->capacity) {
+        cache->capacity = (cache->capacity == 0) ? 64 : cache->capacity * 2;
+        cache->entries = realloc(cache->entries, sizeof(handler_entry_t) * cache->capacity);
+    }
+
+    handler_entry_t *new_entry = &cache->entries[cache->size];
+    memset(new_entry, 0, sizeof(handler_entry_t));
+
+    if (load_handler(new_entry, full_path, &st, path_hash) == 0) {
+        cache->size++;
+        return new_entry;
+    }
+
+    return NULL;
+}
+
+void handle_request(int client_fd, monitor_t *monitor, handler_cache_t *cache) {
     int flags = fcntl(client_fd, F_GETFL, 0);
-    if (flags == -1) {
-        LOG_ERROR("FATAL: Worker failed to set fcntl(): %s", strerror(errno));
-        return ;
-    }
-    if (fcntl(client_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-        LOG_ERROR("FATAL: Worker failed to set fcntl(): %s", strerror(errno));
-        return ;
-    }
+    fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
 
     headers_t hdrs = {0};
     if (read_headers(client_fd, &hdrs) < 0) return;
+
+    cJSON *req_json = cJSON_CreateObject();
+    cJSON_AddStringToObject(req_json, "handler", hdrs.handler_name);
     
-    char *content_length = strcasestr(hdrs.headers, "Content-Length");
-    if (content_length) {
-        char length_buffer[32];
-        const char *end = strchr(content_length, ' ');
-        if (!end || end - content_length >= sizeof(length_buffer)) {
-            write(client_fd, BAD_REQUEST, strlen(BAD_REQUEST));
-            return;
-        }
-        strncpy(length_buffer, content_length, end - content_length);
-        length_buffer[end - content_length] = '\0';
-        hdrs.content_length = strtol(length_buffer, NULL, 10);
-        if (hdrs.content_length == LONG_MIN || hdrs.content_length == LONG_MAX) {
-            LOG_ERROR("error: %s", strerror(errno));
-        }
-    }
+    cJSON *req_headers = cJSON_CreateObject();
+    cJSON_AddStringToObject(req_json, "raw_headers", hdrs.headers);
     
-    if (hdrs.content_length > 0) {
-        ssize_t remaining = (ssize_t)(content_length - ( hdrs.bytes_read - (hdrs.headers_end - hdrs.headers) - 4));
-        while (remaining > 0) {
-            struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
-            int poll_result = poll(&pfd, 1, 5000);
+    char *json_request_str = cJSON_PrintUnformatted(req_json);
 
-            if (poll_result < 0) {
-                if (errno == EINTR) continue;
-                LOG_ERROR("poll failed during body stream: %s", strerror(errno));
-                break;
-            } else if (poll_result == 0) {
-                LOG_WARN("something went wrong while reading the body");
-                break;
-            }
-            
-            ssize_t chunk_size = read(client_fd, hdrs.headers + hdrs.bytes_read, sizeof(hdrs.headers) - hdrs.bytes_read);
+    unsigned long path_hash = hash_path(hdrs.handler_name);
+    handler_entry_t *entry = get_handler_from_cache(cache, hdrs.handler_name, path_hash);
 
-            if (chunk_size > 0) {
-                hdrs.bytes_read += chunk_size;
-                remaining -= chunk_size;
-                hdrs.headers[hdrs.bytes_read] = 0;
-            } else if (chunk_size == 0) {
-                break;
-            } else if (chunk_size < 0) {
-                if (errno == EINTR) continue;
-                LOG_ERROR("read failed during body stream: %s", strerror(errno));
-                break;
-            }
-        } 
-    }
-
-    char full_path[2048];
-    snprintf(full_path, sizeof(full_path), "%s%s.so", g_cfg.exec_path, hdrs.handler_name);
-    void *handle = dlopen(full_path, RTLD_NOW | RTLD_LOCAL);
-    if (!handle) {
-        LOG_ERROR("error: handler not found: %s", dlerror());
+    if (!entry) {
         write(client_fd, NOT_FOUND, NOT_FOUND_LEN);
-    }
-    handler_func handler = (handler_func)dlsym(handle, "handler");
-    if (!handler) {
-        LOG_ERROR("error: dlsym: %s", dlerror());
-        dlclose(handle);
-        return ;
+        cJSON_Delete(req_json);
+        free(json_request_str);
+        return;
     }
 
+    pthread_mutex_lock(&(monitor->mutex));
     clock_gettime(CLOCK_MONOTONIC, &(monitor->start));
     monitor->handler = hdrs.handler_name;
-    monitor->timeout = 6000;
+    monitor->timeout = entry->timeout_ms;
     monitor->status = 0;
     monitor->client_fd = client_fd;
+    pthread_mutex_unlock(&(monitor->mutex));
 
-    pthread_mutex_unlock(&monitor->mutex);
-    char *result = handler(hdrs.headers);
+    char response_buffer[65536];
+    size_t result_len = 0;
+    
+    const char *result_ptr = entry->func(
+        json_request_str, 
+        response_buffer, 
+        sizeof(response_buffer), 
+        &result_len
+    );
+
+    pthread_mutex_lock(&(monitor->mutex));
     monitor->status = 1;
-    pthread_mutex_lock(&monitor->mutex);
+    pthread_mutex_unlock(&(monitor->mutex));
 
-    char header[256];
-    int body_len = strlen(result);
-    int header_len = snprintf(header, sizeof(header),
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Length: %d\r\n"
-        "Content-Type: application/json\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        body_len);
+    const char *final_json_ptr = (result_ptr != NULL) ? result_ptr : response_buffer;
+    cJSON *res_json = cJSON_Parse(final_json_ptr);
+    
+    if (res_json) {
+        cJSON *status = cJSON_GetObjectItem(res_json, "status");
+        cJSON *body = cJSON_GetObjectItem(res_json, "body");
+        
+        int http_status = status ? status->valueint : 200;
+        char *body_str = cJSON_IsObject(body) ? cJSON_PrintUnformatted(body) : strdup(body->valuestring);
+        
+        char http_resp[70000];
+        int full_len = snprintf(http_resp, sizeof(http_resp),
+            "HTTP/1.1 % d % s\r\n"
+            "Content-Length: % zu\r\n"
+            "Content-Type: application/json\r\n"
+            "Connection: close\r\n\r\n"
+            "% s",
+            http_status, (http_status == 200 ? "OK" : "Error"), 
+            strlen(body_str), body_str);
 
-    write(client_fd, header, header_len);
-    write(client_fd, result, body_len);
+        write(client_fd, http_resp, full_len);
+        free(body_str);
+        cJSON_Delete(res_json);
+    } else {
+        write(client_fd, INTERNAL_ERROR, INTERNAL_ERROR_LEN);
+    }
 
-    dlclose(handle);
+    cJSON_Delete(req_json);
+    free(json_request_str);
 }
 
 void exec_worker(int listen_fd) {
     if (g_cfg.daemonize) worker_redirect_logs();
+
+    handler_cache_t cache = { .entries = NULL, .size = 0, .capacity = 0 };
 
     pthread_t thread;
     monitor_t timeout;
@@ -220,7 +264,7 @@ void exec_worker(int listen_fd) {
         LOG_INFO("Worker (PID %d) accepted connection from %s:%d on new FD %d.",
                 getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
 
-        handle_request(client_fd, &timeout);
+        handle_request(client_fd, &timeout, &cache);
         
         if (close(client_fd) < 0) {
             if (errno == EBADF) {

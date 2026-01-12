@@ -45,8 +45,24 @@ typedef struct proc_stats_s {
     unsigned long starttime;
 }   proc_stats_t;
 
+typedef const char* (*handler_func)(const char*, char*, size_t, size_t*);
+
+typedef struct {
+    char *path;
+    unsigned long hash;
+    void *dl_handle;
+    handler_func func;
+    time_t last_mtime;
+    int timeout_ms;
+} handler_entry_t;
+
+typedef struct {
+    handler_entry_t *entries;
+    size_t size;
+    size_t capacity;
+} handler_cache_t;
+
 extern pid_t *g_worker_pids;
-typedef char* (*handler_func)(void *req);
 
 void exec_worker(int listen_fd);
 void daemonize();

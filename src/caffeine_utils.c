@@ -165,3 +165,11 @@ char* get_default_path() {
     snprintf(path, len, "%s%s", pw->pw_dir, EXEC_PATH);
     return path;
 }
+
+unsigned long hash_path(const char *str) {
+    unsigned long hash = 5381;
+    int c;
+    while ((c = *str++))
+        hash = ((hash << 5) + hash) + c; 
+    return hash;
+}
