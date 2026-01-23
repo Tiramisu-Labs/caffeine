@@ -14,5 +14,6 @@ void list_running_instances();
 char *find_headers_end(const char *__haystack, const char *__needle, size_t size);
 ssize_t write_fully(int fd, const char *buf, size_t count);
 unsigned long hash_path(const char *str);
+uint64_t now_ms(void);
 
 #endif

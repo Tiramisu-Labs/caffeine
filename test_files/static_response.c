@@ -8,7 +8,6 @@ extern "C" {
 
 const char* handler(
     const char *request_data, 
-    size_t data_len, 
     char *response_buffer, 
     size_t buffer_size,
     size_t *result_len

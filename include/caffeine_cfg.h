@@ -7,6 +7,7 @@
 
 #include <inttypes.h>
 #include <sys/types.h>
+#include <caffeine.h>
 
 typedef struct {
     uint8_t     daemonize;
@@ -16,7 +17,6 @@ typedef struct {
     uint8_t     stop_instance;
     uint8_t     list_instances;
     uint8_t     deploy;
-    pid_t       *workers_pid;
     pid_t       *dead_workers;
     int         dead_workers_idx;
     int         listen_fd;

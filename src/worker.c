@@ -17,43 +17,12 @@
 #include <pthread.h>
 #include <time.h>
 #include <cJSON.h>
+#include <sys/timerfd.h>
+#include <assert.h>
 
 #define TIMEOUT -2
 
-typedef struct monitor_s {
-    char            *handler;
-    unsigned int    timeout;
-    int             status;
-    struct timespec start;
-    pthread_mutex_t mutex;
-    int             client_fd;
-}   monitor_t;
-
-void* timeout_thread(void *args)
-{
-    monitor_t *monitor = (monitor_t *)args;
-    int running = 0;
-    for (;;) {
-        pthread_mutex_lock(&(monitor->mutex));
-        running = 1;
-        while(running) {
-            struct timespec now;
-            clock_gettime(CLOCK_MONOTONIC, &now);
-            long elapsed_ms = (now.tv_sec - monitor->start.tv_sec) * 1000 + (now.tv_nsec - monitor->start.tv_nsec) / 1000000;
-
-            if (monitor->status == 1) {
-                running = 0;
-                break;
-            } else if (elapsed_ms >= monitor->timeout && monitor->status == 0) {
-                write(monitor->client_fd, REQUEST_TIMEOUT, REQUEST_TIMEOUT_LEN);
-                LOG_WARN("killing worker %d, %s timeout", getpid(), monitor->handler);
-                exit(TIMEOUT);
-            }
-            usleep(1000);
-        }
-        pthread_mutex_unlock(&(monitor->mutex));
-    }
-}
+#define HEARTBEAT_INTERVAL_MS 500 // 0.5 sec
 
 void worker_redirect_logs() {
     char *log_path = get_log_path();
@@ -145,20 +114,27 @@ handler_entry_t* get_handler_from_cache(handler_cache_t *cache, const char *hand
     return NULL;
 }
 
-void handle_request(int client_fd, monitor_t *monitor, handler_cache_t *cache) {
-    int flags = fcntl(client_fd, F_GETFL, 0);
-    fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* map, int i)
+{
+    struct timeval tv;
+    tv.tv_sec = 5; 
+    tv.tv_usec = 0;
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 
     headers_t hdrs = {0};
-    if (read_headers(client_fd, &hdrs) < 0) return;
+
+    if (read_headers(client_fd, &hdrs) < 0) {
+        LOG_WARN("Failed to read headers");
+        return;
+    }
 
     cJSON *req_json = cJSON_CreateObject();
     cJSON_AddStringToObject(req_json, "handler", hdrs.handler_name);
     
     cJSON *req_headers = cJSON_CreateObject();
-    cJSON_AddStringToObject(req_json, "raw_headers", hdrs.headers);
+    cJSON_AddStringToObject(req_headers, "headers", hdrs.headers);
     
-    char *json_request_str = cJSON_PrintUnformatted(req_json);
+    char *json_request_str = cJSON_PrintUnformatted(req_headers);
 
     unsigned long path_hash = hash_path(hdrs.handler_name);
     handler_entry_t *entry = get_handler_from_cache(cache, hdrs.handler_name, path_hash);
@@ -169,29 +145,19 @@ void handle_request(int client_fd, monitor_t *monitor, handler_cache_t *cache) {
         free(json_request_str);
         return;
     }
-
-    pthread_mutex_lock(&(monitor->mutex));
-    clock_gettime(CLOCK_MONOTONIC, &(monitor->start));
-    monitor->handler = hdrs.handler_name;
-    monitor->timeout = entry->timeout_ms;
-    monitor->status = 0;
-    monitor->client_fd = client_fd;
-    pthread_mutex_unlock(&(monitor->mutex));
-
     char response_buffer[65536];
     size_t result_len = 0;
     
+    map->workers[i].state = W_BUSY;
+    map->workers[i].start_ms = now_ms();
     const char *result_ptr = entry->func(
-        json_request_str, 
-        response_buffer, 
-        sizeof(response_buffer), 
+        json_request_str,
+        response_buffer,
+        sizeof(response_buffer),
         &result_len
     );
 
-    pthread_mutex_lock(&(monitor->mutex));
-    monitor->status = 1;
-    pthread_mutex_unlock(&(monitor->mutex));
-
+    map->workers[i].state = W_IDLE;
     const char *final_json_ptr = (result_ptr != NULL) ? result_ptr : response_buffer;
     cJSON *res_json = cJSON_Parse(final_json_ptr);
     
@@ -204,11 +170,11 @@ void handle_request(int client_fd, monitor_t *monitor, handler_cache_t *cache) {
         
         char http_resp[70000];
         int full_len = snprintf(http_resp, sizeof(http_resp),
-            "HTTP/1.1 % d % s\r\n"
-            "Content-Length: % zu\r\n"
+            "HTTP/1.1 %d %s\r\n"
+            "Content-Length: %zu\r\n"
             "Content-Type: application/json\r\n"
             "Connection: close\r\n\r\n"
-            "% s",
+            "%s",
             http_status, (http_status == 200 ? "OK" : "Error"), 
             strlen(body_str), body_str);
 
@@ -223,49 +189,38 @@ void handle_request(int client_fd, monitor_t *monitor, handler_cache_t *cache) {
     free(json_request_str);
 }
 
-void exec_worker(int listen_fd) {
-    if (g_cfg.daemonize) worker_redirect_logs();
+void exec_worker(int listen_fd, shm_layout_t* map, int i)
+{
+    if (g_cfg.daemonize)
+        worker_redirect_logs();
 
-    handler_cache_t cache = { .entries = NULL, .size = 0, .capacity = 0 };
+    handler_cache_t cache = {0};
 
-    pthread_t thread;
-    monitor_t timeout;
-    if (pthread_mutex_init(&timeout.mutex, NULL) != 0) {
-        // error
+    LOG_INFO("Worker %d started", getpid());
+
+    int hb_tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (hb_tfd < 0) {
+        LOG_ERROR("timerfd_create failed: %s", strerror(errno));
+        _exit(1);
     }
-    pthread_mutex_lock(&(timeout.mutex));
-    if (pthread_create(&thread, NULL, timeout_thread, &timeout) != 0) {
-        perror("pthread_create failed");
-        exit(1);
-    }
-    pthread_detach(thread);
-    // signal(SIGCHLD, SIG_IGN);
-
-    LOG_INFO("Worker (PID %d) is running and listening on shared FD %d.", getpid(), listen_fd);
 
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
     char client_ip[INET_ADDRSTRLEN];
     int client_fd;
-
-    while (1) {
+    // shm_layout_t layout;
+    // memcpy(&layout, map, sizeof(shm_layout_t));
+    for (;;) {
         client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
 
         if (client_fd < 0) {
-            if (errno == EINTR) continue;
-            
-            LOG_ERROR("Worker accept() failed: %s", strerror(errno));
-            close(listen_fd);
-            exit(EXIT_FAILURE);
+            LOG_ERROR("accept failed: %s", strerror(errno));
+            continue;
         }
+        LOG_DEBUG("Worker (PID %d) accepted connection from %s:%d on new FD %d.",
+            getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
 
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
-
-        LOG_INFO("Worker (PID %d) accepted connection from %s:%d on new FD %d.",
-                getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
-
-        handle_request(client_fd, &timeout, &cache);
-        
+        handle_request(client_fd, &cache, map, i);
         if (close(client_fd) < 0) {
             if (errno == EBADF) {
                 LOG_DEBUG("Expected EBADF (FD already closed by child) on client FD %d.", client_fd);
@@ -275,11 +230,9 @@ void exec_worker(int listen_fd) {
         } else {
             LOG_DEBUG("Successfully closed client FD %d.", client_fd);
         }
-
-        LOG_DEBUG("Worker (PID %d) finished and closed client FD %d. Waiting for next connection.", getpid(), client_fd);
     }
 
-    LOG_INFO("Worker exiting...");
-    close(listen_fd);
-    exit(EXIT_SUCCESS);
+    close(hb_tfd);
+    _exit(0);
 }
+

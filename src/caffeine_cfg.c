@@ -123,7 +123,6 @@ void init_config()
     g_cfg.max_workers = num_cores * 2;
     if (g_cfg.max_workers < 2) g_cfg.max_workers = 2;
     if (g_cfg.max_workers > 64) g_cfg.max_workers = 64;
-    g_cfg.workers_pid = calloc(g_cfg.max_workers, sizeof(pid_t));
     g_cfg.dead_workers = calloc(g_cfg.max_workers, sizeof(pid_t));
     g_cfg.dead_workers_idx = 0;
 }

@@ -15,6 +15,7 @@
 #include <poll.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <shared_mem.h>
 
 #define SOCKET_PATH "/tmp/"
 #define SOCK_FILE_PREFIX "caffeine_"
@@ -39,12 +40,6 @@ typedef struct headers_s {
     uint8_t is_query;
 }   headers_t;
 
-typedef struct proc_stats_s {
-    unsigned long utime;
-    unsigned long stime;
-    unsigned long starttime;
-}   proc_stats_t;
-
 typedef const char* (*handler_func)(const char*, char*, size_t, size_t*);
 
 typedef struct {
@@ -62,9 +57,14 @@ typedef struct {
     size_t capacity;
 } handler_cache_t;
 
-extern pid_t *g_worker_pids;
+typedef enum {
+    W_IDLE = 'I',
+    W_BUSY = 'B',
+    W_EXIT = 'X',
+    W_HEARTBEAT = 'H'
+} worker_msg_t;
 
-void exec_worker(int listen_fd);
+void exec_worker(int listen_fd, shm_layout_t* worker_map, int i);
 void daemonize();
 
 #endif

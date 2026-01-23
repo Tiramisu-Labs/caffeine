@@ -63,16 +63,3 @@ void sigchld_handler(int signum) {
         }
     }
 }
-
-int sig_init()
-{
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = sigterm_handler;
-    if (sigaction(SIGTERM, &sa, NULL) < 0) return -1;
-
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = sigchld_handler;
-    if (sigaction(SIGCHLD, &sa, NULL) < 0) return -1;
-    return 0;
-}

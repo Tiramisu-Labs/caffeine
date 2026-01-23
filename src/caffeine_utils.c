@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <pwd.h>
 #include <ctype.h>
+#include <time.h>
 
 void free_and_exit(int status) {
     if (g_cfg.instance_name) free(g_cfg.instance_name);
@@ -13,7 +14,6 @@ void free_and_exit(int status) {
     if (g_cfg.socket_path) free(g_cfg.socket_path);
     if (g_cfg.log_path) free(g_cfg.log_path);
     if (g_cfg.pid_path) free(g_cfg.pid_path);
-    if (g_cfg.workers_pid) free(g_cfg.workers_pid);
     exit(status);
 }
 
@@ -172,4 +172,10 @@ unsigned long hash_path(const char *str) {
     while ((c = *str++))
         hash = ((hash << 5) + hash) + c; 
     return hash;
+}
+
+uint64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
