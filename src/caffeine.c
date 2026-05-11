@@ -97,7 +97,6 @@ int main(int argc, char **argv) {
     sigaddset(&mask, SIGTERM);
     sigaddset(&mask, SIGINT);
     
-    // new method: instad of definying custom sigaction for signals, push them into an fd with signalfd
     sigprocmask(SIG_BLOCK, &mask, NULL);
     int sigfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
     if (sigfd < 0) {
