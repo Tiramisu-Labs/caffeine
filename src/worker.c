@@ -211,6 +211,8 @@ void exec_worker(int listen_fd, shm_layout_t* map, int i)
     // shm_layout_t layout;
     // memcpy(&layout, map, sizeof(shm_layout_t));
     for (;;) {
+        map->workers[i].state = W_IDLE;
+
         client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
 
         if (client_fd < 0) {
@@ -219,7 +221,10 @@ void exec_worker(int listen_fd, shm_layout_t* map, int i)
         }
         LOG_DEBUG("Worker (PID %d) accepted connection from %s:%d on new FD %d.",
             getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
-
+        
+        handle_request(client_fd, &cache, map, i);
+        close(client_fd);
+        
         handle_request(client_fd, &cache, map, i);
         if (close(client_fd) < 0) {
             if (errno == EBADF) {
