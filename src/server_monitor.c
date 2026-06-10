@@ -102,9 +102,9 @@ void spawn_worker(shm_layout_t* map) {
     if (pid == 0) {
         shm_worker_t* worker_ptr = NULL;
         for (int i = 0; i < g_cfg.max_workers; i++) {
-            if (__atomic_test_and_set(&map->workers[i].used, __ATOMIC_SEQ_CST) == 0) {
+            if (!map->workers[i].used) {
                 map->workers[i].used = 1;
-                map->workers[i].pid = getpid();
+                map->workers[i].pid = pid;
                 map->workers[i].state = W_IDLE;
                 exec_worker(g_cfg.listen_fd, map, i);
                 break;

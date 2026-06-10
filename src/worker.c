@@ -120,9 +120,9 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
     tv.tv_sec = 5; 
     tv.tv_usec = 0;
     setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
-
+    
     headers_t hdrs = {0};
-
+    
     if (read_headers(client_fd, &hdrs) < 0) {
         LOG_WARN("Failed to read headers");
         return;
@@ -135,10 +135,9 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
     cJSON_AddStringToObject(req_headers, "headers", hdrs.headers);
     
     char *json_request_str = cJSON_PrintUnformatted(req_headers);
-
     unsigned long path_hash = hash_path(hdrs.handler_name);
     handler_entry_t *entry = get_handler_from_cache(cache, hdrs.handler_name, path_hash);
-
+    
     if (!entry) {
         write(client_fd, NOT_FOUND, NOT_FOUND_LEN);
         cJSON_Delete(req_json);
@@ -156,8 +155,6 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
         sizeof(response_buffer),
         &result_len
     );
-
-    map->workers[i].state = W_IDLE;
     const char *final_json_ptr = (result_ptr != NULL) ? result_ptr : response_buffer;
     cJSON *res_json = cJSON_Parse(final_json_ptr);
     
@@ -223,9 +220,7 @@ void exec_worker(int listen_fd, shm_layout_t* map, int i)
             getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
         
         handle_request(client_fd, &cache, map, i);
-        close(client_fd);
-        
-        handle_request(client_fd, &cache, map, i);
+
         if (close(client_fd) < 0) {
             if (errno == EBADF) {
                 LOG_DEBUG("Expected EBADF (FD already closed by child) on client FD %d.", client_fd);
