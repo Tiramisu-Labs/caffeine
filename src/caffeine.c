@@ -10,40 +10,60 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/types.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <sys/signalfd.h>
+#include <sys/timerfd.h>
+#include <poll.h>
+#include <netinet/in.h>
+#include <errno.h>
+#include <caffeine_monitor.h>
+#include <sys/mman.h>
 
-pid_t *g_worker_pids = NULL;
+static void handle_signals(int sigfd, shm_layout_t* map) {
+    struct signalfd_siginfo si;
+
+    while (read(sigfd, &si, sizeof(si)) == sizeof(si)) {
+
+        switch (si.ssi_signo) {
+
+        case SIGCHLD:
+            reap_workers(map);
+            break;
+
+        case SIGTERM:
+        case SIGINT:
+            g_shutdown_requested = 1;
+            break;
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     init_config();
-        
     if (parse_arguments(argc, argv) < 0) free_and_exit(EXIT_FAILURE);
-    
+
+    shm_layout_t* map = create_shared_map();
+
     if (g_cfg.deploy) {
         int i = 0;
         while (g_cfg.deploy_start[i]) {
-            if (is_flag( g_cfg.deploy_start[i])) break;
-            handle_deploy( g_cfg.deploy_start[i]);
+            if (is_flag(g_cfg.deploy_start[i])) break;
+            handle_deploy(g_cfg.deploy_start[i]);
             i++;
         }
         free_and_exit(EXIT_SUCCESS);
     }
 
-    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd < 0) {
+    g_cfg.listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (g_cfg.listen_fd < 0) {
         fprintf(stderr, "%scaffeine: error: socket: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
         free_and_exit(EXIT_FAILURE);
     }
 
     int enable = 1;
-    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
-        fprintf(stderr, "%scaffeine: error: setsockopt(SO_REUSEADDR): %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
-        close(listen_fd);
-        free_and_exit(EXIT_FAILURE);
-    }
-    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
-        fprintf(stderr, "%scaffeine: error: setsockopt(SO_REUSEPORT) failed: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
-        close(listen_fd);
-        free_and_exit(EXIT_FAILURE);
-    }
+    setsockopt(g_cfg.listen_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
+    setsockopt(g_cfg.listen_fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable));
     
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
@@ -51,70 +71,91 @@ int main(int argc, char **argv) {
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(g_cfg.port);
     
-    if (bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        fprintf(stderr, "%scaffeine: error: failed to bind to port %d: %s%s\n", COLOR_BRIGHT_RED, g_cfg.port, strerror(errno), COLOR_RESET);
-        close(listen_fd);
+    if (bind(g_cfg.listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        fprintf(stderr, "%scaffeine: error: bind failed: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
+        close(g_cfg.listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
     
-    if (listen(listen_fd, 4096) < 0) {
-        fprintf(stderr, "%scaffeine: error: couldn't listen on port %d: %s%s\n", COLOR_BRIGHT_RED, g_cfg.port, strerror(errno), COLOR_RESET);
-        close(listen_fd);
+    if (listen(g_cfg.listen_fd, 4096) < 0) {
+        fprintf(stderr, "%scaffeine: error: listen failed: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
+        close(g_cfg.listen_fd);
         free_and_exit(EXIT_FAILURE);
     }
 
-    if (g_cfg.daemonize) {
-        fprintf(stdout, "%scaffeine: starting Caffeine server as a daemon...%s\n", COLOR_GREEN, COLOR_RESET);
-        daemonize();
-    }
-    fprintf(stdout, "caffeine: spawning %d worker processes...\n", g_cfg.workers);
+    if (g_cfg.daemonize) daemonize();
 
-    pid_t worker_pids[g_cfg.workers];
-    for (int i = 0; i < g_cfg.workers; i++) {
-        pid_t pid = fork();
-        
-        if (pid < 0) {
-            fprintf(stderr, "%scaffeine: error: fork: %s%s\n", COLOR_BRIGHT_RED, strerror(errno), COLOR_RESET);
-            free_and_exit(EXIT_FAILURE);
+    if (g_cfg.min_workers > g_cfg.max_workers) g_cfg.min_workers = g_cfg.max_workers;
+
+    for (int i = 0; i < g_cfg.min_workers; i++) spawn_worker(map);
+    
+    fprintf(stdout, "%scaffeine: server running with %d workers on port %d%s\n\n", COLOR_GREEN, g_cfg.min_workers, g_cfg.port, COLOR_RESET);
+
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGINT);
+    
+    sigprocmask(SIG_BLOCK, &mask, NULL);
+    int sigfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+    if (sigfd < 0) {
+        perror("signalfd");
+        free_and_exit(EXIT_FAILURE);
+    }
+    
+    int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (tfd < 0) {
+        perror("timerfd_create");
+        free_and_exit(EXIT_FAILURE);
+    }
+
+    struct itimerspec its = {
+        .it_interval = { .tv_sec = 5, .tv_nsec = 0 },
+        .it_value    = { .tv_sec = 5, .tv_nsec = 0 }
+    };
+
+    timerfd_settime(tfd, 0, &its, NULL);
+
+    struct pollfd fds[2];
+    fds[0].fd = sigfd;
+    fds[0].events = POLLIN;
+    fds[1].fd = tfd;
+    fds[1].events = POLLIN;
+
+    if (monitor_init() < 0)
+        free_and_exit(EXIT_FAILURE);
+
+    while (!g_shutdown_requested) {
+        int ret = poll(fds, 2, -1);
+        if (ret < 0) {
+            if (errno == EINTR) continue;
+            perror("poll");
+            break;
         }
-        
-        if (pid == 0) {
-            fprintf(stdout, "caffeine: worker process started (PID %d)\n", getpid());
-            exec_worker(listen_fd);
-            exit(EXIT_FAILURE); 
-        } 
-        worker_pids[i] = pid;
+
+        if (fds[0].revents & POLLIN)
+            handle_signals(sigfd, map);
+
+        if (fds[1].revents & POLLIN)
+            monitor_and_scale(tfd, map);
     }
     
-    close(listen_fd);
+    sigset_t empty;
+    sigemptyset(&empty);
+    sigprocmask(SIG_SETMASK, &empty, NULL);
+
+    LOG_INFO("Server shutting down...");
+    for (int i = 0; i < g_cfg.current_workers; i++) {
+        if (map->workers[i].used)
+            kill(map->workers[i].pid, SIGTERM);
+    }
     
-    fprintf(stdout, "%scaffeine: server running with %d workers on port %d%s\n\n", COLOR_GREEN, g_cfg.workers, g_cfg.port, COLOR_RESET);
+    while (g_cfg.current_workers > 0)
+        reap_workers(map);
 
-    if (sig_init() < 0) {
-        LOG_ERROR("Failed to initialize signals: %s. exiting...", strerror(errno));
-        for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
-        free_and_exit(EXIT_FAILURE);
-    }
-
-    sigset_t oldmask, term_mask;
-    if (sigemptyset(&term_mask) < 0 || sigaddset(&term_mask, SIGTERM) < 0) {
-        LOG_ERROR("sigset operations failed.");
-        for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
-        free_and_exit(EXIT_FAILURE);
-    }
-
-    if (sigprocmask(SIG_BLOCK, &term_mask, &oldmask) < 0) {
-        LOG_ERROR("sigprocmask BLOCK failed.");
-        for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
-        free_and_exit(EXIT_FAILURE);
-    }
-
-    while (!g_shutdown_requested) sigsuspend(&oldmask);
-
-    sigprocmask(SIG_SETMASK, &oldmask, NULL);
-
-    LOG_INFO("Parent performing cleanup and exiting. Killing workers.");
-    for (int i = 0; i < g_cfg.workers; i++) kill(worker_pids[i], SIGTERM);
+    monitor_cleanup();
+    munmap(map, sizeof(shm_layout_t));
     free_and_exit(EXIT_SUCCESS);
     return 0;
 }

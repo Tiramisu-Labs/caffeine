@@ -17,73 +17,6 @@ static void strupperncpy(char *__restrict __dest, const char *__restrict __src, 
     __dest[i] = 0;
 }
 
-int setup_cgi_environment(headers_t *hdrs, int max_strings, int max_length, char env_buffer[max_strings][max_length], char **envp) {
-    char *current_line = strchr(hdrs->headers, '\n');
-    if (current_line) current_line++;
-
-    int i = 0;
-    while (current_line && current_line < hdrs->headers_end) {
-        char *eol = strstr(current_line, "\r\n");
-        if (!eol) break;
-        *eol = '\0'; 
-        char *separator = strchr(current_line, ':');
-        if (separator) {
-            *separator = '\0'; 
-            char *key = trim_whitespace(current_line);
-            char *value = trim_whitespace(separator + 1);
-            if (strcasecmp(key, "Content-Length") == 0) {
-                snprintf(env_buffer[i], max_length, "CONTENT_LENGTH=%s", value);
-                envp[i] = env_buffer[i];
-                i++;
-            } else if (strcasecmp(key, "Content-Type") == 0) {
-                snprintf(env_buffer[i], max_length, "CONTENT_TYPE=%s", value);
-                envp[i] = env_buffer[i];
-                i++;
-            } else if (strcasecmp(key, "Authorization") == 0) {
-                snprintf(env_buffer[i], max_length, "AUTH_TYPE=%s", value);
-                envp[i] = env_buffer[i];
-                i++;
-                snprintf(env_buffer[i], max_length, "HTTP_AUTHORIZATION=%s", value);
-                envp[i] = env_buffer[i];
-                i++;
-            } else {
-                strncpy(env_buffer[i], "HTTP_", sizeof(env_buffer[i]));
-                strupperncpy(env_buffer[i] + 5, key, sizeof(env_buffer[i]) - 5);
-                size_t written_bytes = strlen(env_buffer[i]);
-                snprintf(env_buffer[i] + written_bytes, max_length - written_bytes, "=%s", value);
-                envp[i] = env_buffer[i];
-                i++;
-            }
-        }
-        current_line = eol + 2;
-    }
-    snprintf(env_buffer[i], max_length, "REQUEST_METHOD=%s", hdrs->method);
-    envp[i] = env_buffer[i];
-    i++;
-    if (hdrs->is_query) {
-        snprintf(env_buffer[i], max_length, "QUERY_STRING=%s", hdrs->query);
-        envp[i] = env_buffer[i];
-        i++;
-    }
-    envp[i] = NULL;
-}
-
-int check_valid_path(int client_fd, char *full_path) {
-    struct stat st;
-    if (stat(full_path, &st) == -1) {
-        if (errno == ENOENT) {
-            LOG_WARN("File not found: %s", full_path);
-            write(client_fd, NOT_FOUND, NOT_FOUND_LEN);
-            return -1;
-        } else {
-            LOG_ERROR("stat failed for %s: %s", full_path, strerror(errno));
-            write(client_fd, INTERNAL_ERROR, INTERNAL_ERROR_LEN);
-            return -1;
-        }
-    }
-    return 0;
-}
-
 int read_headers(int client_fd, headers_t *hdrs) {
     ssize_t bytes_read = 0;
 
@@ -107,6 +40,7 @@ int read_headers(int client_fd, headers_t *hdrs) {
                     strcmp(hdrs->method, "DELETE") && strcmp(hdrs->method, "PUT") &&
                     strcmp(hdrs->method, "POST") && strcmp(hdrs->method, "OPTIONS")) {
                         write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN);
+                        return -1;
                 }
                 i++; // skip space
                 if (hdrs->headers[i] != '/') {

@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <pwd.h>
 #include <ctype.h>
+#include <time.h>
 
 void free_and_exit(int status) {
     if (g_cfg.instance_name) free(g_cfg.instance_name);
@@ -163,4 +164,18 @@ char* get_default_path() {
 
     snprintf(path, len, "%s%s", pw->pw_dir, EXEC_PATH);
     return path;
+}
+
+unsigned long hash_path(const char *str) {
+    unsigned long hash = 5381;
+    int c;
+    while ((c = *str++))
+        hash = ((hash << 5) + hash) + c; 
+    return hash;
+}
+
+uint64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }

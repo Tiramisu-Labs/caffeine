@@ -62,4 +62,16 @@
     "</html>\n"
 #define INTERNAL_ERROR_LEN 164
 
+#define REQUEST_TIMEOUT  \
+    "HTTP/1.1 408 Internal Server Error\r\n"\
+    "Content-Type: text/html\r\n"           \
+    "Content-Length: 67\r\n"                \
+    "\r\n"                                  \
+    "<html>\n"                              \
+    "    <body>\n"                          \
+    "        <h1>408 Timeout</h1>\n"      \
+    "    </body>\n"                         \
+    "</html>\n"
+#define REQUEST_TIMEOUT_LEN 150
+
 #endif

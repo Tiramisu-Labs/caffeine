@@ -22,6 +22,10 @@ add_executable(
     src/list_instances.c
     src/headers.c
     src/deploy.c
+    src/cJSON.c
+    src/cJSON_Utils.c
+    src/server_monitor.c
+    src/shared_mem.c
     )
 
 # Define the installation rule for the executable

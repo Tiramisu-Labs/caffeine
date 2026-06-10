@@ -1,6 +1,7 @@
 #include <caffeine_sig.h>
 #include <caffeine_utils.h>
 #include <caffeine.h>
+#include <caffeine_cfg.h>
 #include <log.h>
 #include <pwd.h>
 #include <unistd.h>
@@ -48,13 +49,17 @@ void sigterm_handler(int signum) {
     }
 }
 
-int sig_init()
-{
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = sigterm_handler;
-    if (sigaction(SIGTERM, &sa, NULL) < 0) {
-        return -1;
+void sigchld_handler(int signum) {
+    int status;
+    pid_t pid = waitpid(-1, &status, WNOHANG);
+    if (pid > 0) {
+        if (WIFEXITED(status)) {
+            int code = WEXITSTATUS(status);
+            LOG_INFO("Worker %d exited normally (%d)\n", pid, code);
+            g_cfg.dead_workers[g_cfg.dead_workers_idx++] = pid;
+        } else if (WIFSIGNALED(status)) {
+            int sig = WTERMSIG(status);
+            LOG_WARN("Worker %d killed by signal %d\n", pid, sig);
+        }
     }
-    return 0;
 }
