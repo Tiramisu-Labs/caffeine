@@ -34,12 +34,18 @@ else
     TARGET = bin/caffeine-$(ARCH)
 endif
 
-CFLAGS  = -Wall -Wextra -O2 -I$(INC_DIR)
-LDFLAGS = -pthread
+DEBUG ?= 0
+ifeq ($(DEBUG),1)
+    CFLAGS = -Wall -Wextra -g -O0 -I$(INC_DIR)
+    STRIP_CMD = @echo "Debug build: skipping strip."
+else
+    CFLAGS = -Wall -Wextra -O2 -I$(INC_DIR)
+    STRIP_CMD = strip --strip-all $@
+endif
 
+LDFLAGS = -pthread
 OBJ_DIR = build/$(ARCH)
 OBJS    = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
-
 PREFIX ?= /usr/local
 
 .PHONY: all clean install
@@ -48,8 +54,9 @@ all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	@mkdir -p bin
-	@echo "Linking executable for $(ARCH): $@..."
+	@echo "Linking executable for $(ARCH) (DEBUG=$(DEBUG)): $@..."
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(STRIP_CMD)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(OBJ_DIR)
