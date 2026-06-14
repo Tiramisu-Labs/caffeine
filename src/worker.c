@@ -89,7 +89,6 @@ int load_handler(handler_entry_t *entry, const char *so_path, struct stat *st, u
 handler_entry_t* get_handler(handler_cache_t *cache, const char* host, const char *handler_name, unsigned long path_hash) {
     char full_path[1024];
     snprintf(full_path, sizeof(full_path), "%s%s/%s.so", g_cfg.exec_path, host, handler_name);
-    printf("full path: %s\n", full_path);
     struct stat st;
     if (stat(full_path, &st) < 0) {
         return NULL;

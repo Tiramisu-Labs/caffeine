@@ -124,34 +124,35 @@ char* get_pid_path() {
 }
 
 char* get_log_path() {
-    if (g_cfg.log_path) return g_cfg.log_path;
+    // if (g_cfg.log_path) return g_cfg.log_path;
 
-    struct passwd *pw = getpwuid(getuid());
-    if (pw == NULL) return NULL;
+    // struct passwd *pw = getpwuid(getuid());
+    // if (pw == NULL) return NULL;
     
-    const char *log_dir_suffix = LOG_PATH;
-    const char *log_file_suffix = g_cfg.instance_name;
+    // const char *log_dir_suffix = LOG_PATH;
+    // const char *log_file_suffix = g_cfg.instance_name;
 
-    size_t dir_len = strlen(pw->pw_dir) + strlen(log_dir_suffix);
-    size_t full_len = dir_len + strlen(log_file_suffix) + 5;
+    // size_t dir_len = strlen(pw->pw_dir) + strlen(log_dir_suffix);
+    // size_t full_len = dir_len + strlen(log_file_suffix) + 5;
     
-    char *path = malloc(full_len);
-    if (path == NULL) return NULL;
+    // char *path = malloc(full_len);
+    // if (path == NULL) return NULL;
     
-    snprintf(path, dir_len + 1, "%s%s", pw->pw_dir, log_dir_suffix);
+    // snprintf(path, dir_len + 1, "%s%s", pw->pw_dir, log_dir_suffix);
     
-    struct stat st = {0};
-    if (stat(path, &st) == -1) {
-        if (mkdir(path, 0700) != 0) {
-            LOG_ERROR("mkdir log directory failed: %s", strerror(errno));
-            free(path);
-            return NULL;
-        }
-    }
+    // struct stat st = {0};
+    // if (stat(path, &st) == -1) {
+    //     if (mkdir(path, 0700) != 0) {
+    //         LOG_ERROR("mkdir log directory failed: %s", strerror(errno));
+    //         free(path);
+    //         return NULL;
+    //     }
+    // }
 
-    snprintf(path + dir_len, full_len - dir_len, "%s%s", log_file_suffix, ".log");
-    g_cfg.log_path = path;
-    return g_cfg.log_path;
+    // snprintf(path + dir_len, full_len - dir_len, "%s%s", log_file_suffix, ".log");
+    // g_cfg.log_path = path;
+    // return g_cfg.log_path;
+    return LOG_PATH;
 }
 
 // char* get_default_path() {

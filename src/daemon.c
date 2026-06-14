@@ -41,7 +41,7 @@ void daemonize() {
     char *log_path = get_log_path();
     fd = open(log_path, O_RDWR | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
-        dprintf(stderr_cpy, "%scaffeine: error: coudln't open file %s: %s\n", COLOR_BRIGHT_RED, log_path, COLOR_RESET);
+        dprintf(stderr_cpy, "%scaffeine: error: couldn't open file %s: %s\n", COLOR_BRIGHT_RED, log_path, COLOR_RESET);
         exit(EXIT_FAILURE);
     }
 
