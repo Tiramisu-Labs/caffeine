@@ -130,6 +130,9 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
     
     if (read_headers(client_fd, &hdrs) < 0) {
         LOG_WARN("Failed to read headers");
+        if (write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN) < 0) {
+            LOG_ERROR("error: an error occured while sending BAD_REQUEST");
+        }
         return;
     }
     cJSON *req_json = cJSON_CreateObject();
