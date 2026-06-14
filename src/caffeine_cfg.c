@@ -264,7 +264,8 @@ int parse_arguments(int argc, char **argv) {
     }
     
     #undef CHECK_ARG
-    if (!g_cfg.exec_path) g_cfg.exec_path = get_default_path();
+    // if (!g_cfg.exec_path) g_cfg.exec_path = get_default_path();
+    if (!g_cfg.exec_path) g_cfg.exec_path = EXEC_PATH;
     if (g_cfg.show_log) { display_log_file(); free_and_exit(EXIT_SUCCESS); }
     if (g_cfg.reset_logs) { reset_log_file(); free_and_exit(EXIT_SUCCESS); }
     if (g_cfg.delete_logs) { printf("caffeine: log %s removed\n", get_log_path()); remove(get_log_path()); free_and_exit(EXIT_SUCCESS); }

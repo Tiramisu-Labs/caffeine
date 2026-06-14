@@ -104,7 +104,7 @@ void spawn_worker(shm_layout_t* map) {
         for (int i = 0; i < g_cfg.max_workers; i++) {
             if (!map->workers[i].used) {
                 map->workers[i].used = 1;
-                map->workers[i].pid = pid;
+                map->workers[i].pid = getpid();
                 map->workers[i].state = W_IDLE;
                 exec_worker(g_cfg.listen_fd, map, i);
                 break;

@@ -154,17 +154,17 @@ char* get_log_path() {
     return g_cfg.log_path;
 }
 
-char* get_default_path() {
-    struct passwd *pw = getpwuid(getuid());
-    if (pw == NULL) return NULL;
+// char* get_default_path() {
+//     struct passwd *pw = getpwuid(getuid());
+//     if (pw == NULL) return NULL;
     
-    size_t len = strlen(pw->pw_dir) + strlen(EXEC_PATH) + 1;
-    char *path = malloc(len);
-    if (path == NULL) return NULL;
+//     size_t len = strlen(pw->pw_dir) + strlen(EXEC_PATH) + 1;
+//     char *path = malloc(len);
+//     if (path == NULL) return NULL;
 
-    snprintf(path, len, "%s%s", pw->pw_dir, EXEC_PATH);
-    return path;
-}
+//     snprintf(path, len, "%s%s", pw->pw_dir, EXEC_PATH);
+//     return path;
+// }
 
 unsigned long hash_path(const char *str) {
     unsigned long hash = 5381;
