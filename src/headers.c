@@ -8,19 +8,18 @@
 #include <stdlib.h>
 #include <ctype.h>
 
-static void strupperncpy(char *__restrict __dest, const char *__restrict __src, size_t max_size) {
-    int i = 0;
-    while (__src[i] && i < max_size) {
-        __dest[i] = toupper(__src[i]);
-        i++;
-    }
-    __dest[i] = 0;
-}
+// static void strupperncpy(char *__restrict __dest, const char *__restrict __src, size_t max_size) {
+//     int i = 0;
+//     while (__src[i] && i < max_size) {
+//         __dest[i] = toupper(__src[i]);
+//         i++;
+//     }
+//     __dest[i] = 0;
+// }
 
 int read_headers(int client_fd, headers_t *hdrs) {
     ssize_t bytes_read = 0;
 
-    int i = 0;
     while (hdrs->bytes_read < sizeof(hdrs->headers) - 1) {
         bytes_read = read(client_fd, hdrs->headers + hdrs->bytes_read, sizeof(hdrs->headers) - 1 - hdrs->bytes_read);
 
@@ -39,12 +38,14 @@ int read_headers(int client_fd, headers_t *hdrs) {
                 if (strcmp(hdrs->method, "GET") && strcmp(hdrs->method, "HEAD") &&
                     strcmp(hdrs->method, "DELETE") && strcmp(hdrs->method, "PUT") &&
                     strcmp(hdrs->method, "POST") && strcmp(hdrs->method, "OPTIONS")) {
-                        write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN);
+                        if(write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN) < 0)
+                            LOG_ERROR("failed to send BAD_REQUEST to client");
                         return -1;
                 }
                 i++; // skip space
                 if (hdrs->headers[i] != '/') {
-                    write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN);
+                    if (write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN) <0)
+                        LOG_ERROR("failed to send BAD_REQUEST to client");
                     return -1;
                 }
                 j = 0;
@@ -70,7 +71,8 @@ int read_headers(int client_fd, headers_t *hdrs) {
                 }
                 hdrs->path[j] = 0;
                 if (j > 512) {
-                    write(client_fd, TOO_LONG, TOO_LONG_LEN);
+                    if (write(client_fd, TOO_LONG, TOO_LONG_LEN) <0)
+                        LOG_ERROR("failed to send TOO_LONG to client");
                     return -1;
                 }
                 // add protocol eventually
@@ -99,5 +101,39 @@ int read_headers(int client_fd, headers_t *hdrs) {
     }
     
     if (!hdrs->headers_end) return -1;
+
+    hdrs->host[0] = '\0';
+    char *host_ptr = strstr(hdrs->headers, "\r\nHost:");
+    if (!host_ptr) {
+        host_ptr = strstr(hdrs->headers, "\r\nhost:");
+    }
+
+    if (host_ptr) {
+        host_ptr += 7;
+        while (*host_ptr == ' ' || *host_ptr == '\t') {
+            host_ptr++;
+        }
+
+        int h = 0;
+        int is_ipv6 = (*host_ptr == '[');
+
+        while (host_ptr[h] && host_ptr[h] != '\r' && host_ptr[h] != '\n') {
+            if (!is_ipv6 && host_ptr[h] == ':') {
+                break;
+            }
+            if (is_ipv6 && host_ptr[h] == ']') {
+                hdrs->host[h] = host_ptr[h];
+                h++;
+                break; 
+            }
+
+            hdrs->host[h] = host_ptr[h];
+            h++;
+
+            if (h == sizeof(hdrs->host) - 1) break;
+        }
+        hdrs->host[h] = '\0';
+    }
+
     return 1;
 }

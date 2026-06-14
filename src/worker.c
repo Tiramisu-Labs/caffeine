@@ -42,9 +42,15 @@ void worker_redirect_logs() {
 
     if (log_fd > 2) close(log_fd);
     
-    if (isatty(STDIN_FILENO)) freopen("/dev/null", "r", stdin); 
-    if (isatty(STDOUT_FILENO)) freopen(log_path, "a", stdout);
-    if (isatty(STDERR_FILENO)) freopen(log_path, "a", stderr); 
+    if (isatty(STDIN_FILENO))
+        if (!freopen("/dev/null", "r", stdin))
+            fprintf(stderr, "error: freopen: couldn't redirect read from stdin to /dev/null/\n");
+    if (isatty(STDOUT_FILENO))
+        if (!freopen(log_path, "a", stdout))
+            fprintf(stderr, "error: freopen: couldn't redirect append from stdout to %s\n", log_path);
+    if (isatty(STDERR_FILENO))
+        if (!freopen(log_path, "a", stderr))
+            fprintf(stderr, "error: freopen: couldn't redirect append from stderr to %s\n", log_path);
     
     LOG_INFO("Worker successfully forced redirection of STDOUT/STDERR to log file.");
 }
@@ -80,10 +86,10 @@ int load_handler(handler_entry_t *entry, const char *so_path, struct stat *st, u
     return 0;
 }
 
-handler_entry_t* get_handler_from_cache(handler_cache_t *cache, const char *handler_name, unsigned long path_hash) {
+handler_entry_t* get_handler(handler_cache_t *cache, const char* host, const char *handler_name, unsigned long path_hash) {
     char full_path[1024];
-    snprintf(full_path, sizeof(full_path), "%s%s.so", g_cfg.exec_path, handler_name);
-
+    snprintf(full_path, sizeof(full_path), "%s%s/%s.so", g_cfg.exec_path, host, handler_name);
+    printf("full path: %s\n", full_path);
     struct stat st;
     if (stat(full_path, &st) < 0) {
         return NULL;
@@ -127,7 +133,6 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
         LOG_WARN("Failed to read headers");
         return;
     }
-
     cJSON *req_json = cJSON_CreateObject();
     cJSON_AddStringToObject(req_json, "handler", hdrs.handler_name);
     
@@ -136,10 +141,12 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
     
     char *json_request_str = cJSON_PrintUnformatted(req_headers);
     unsigned long path_hash = hash_path(hdrs.handler_name);
-    handler_entry_t *entry = get_handler_from_cache(cache, hdrs.handler_name, path_hash);
+    handler_entry_t *entry = get_handler(cache, hdrs.host, hdrs.handler_name, path_hash);
     
     if (!entry) {
-        write(client_fd, NOT_FOUND, NOT_FOUND_LEN);
+        if (write(client_fd, NOT_FOUND, NOT_FOUND_LEN) < 0) {
+            LOG_ERROR("error: an error occured while sending NOT_FOUND");
+        }
         cJSON_Delete(req_json);
         free(json_request_str);
         return;
@@ -175,11 +182,13 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
             http_status, (http_status == 200 ? "OK" : "Error"), 
             strlen(body_str), body_str);
 
-        write(client_fd, http_resp, full_len);
+        if (write(client_fd, http_resp, full_len) < 0)
+            LOG_ERROR("failed to send response to client: %s", http_resp);
         free(body_str);
         cJSON_Delete(res_json);
     } else {
-        write(client_fd, INTERNAL_ERROR, INTERNAL_ERROR_LEN);
+        if (write(client_fd, INTERNAL_ERROR, INTERNAL_ERROR_LEN) <0)
+            LOG_ERROR("failed to send INTERANL_ERROR to client");
     }
 
     cJSON_Delete(req_json);

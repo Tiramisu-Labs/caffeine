@@ -27,6 +27,7 @@
 #define PID_FILE_SUFFIX ".pid"
 
 typedef struct headers_s {
+    char    host[512];
     char    method[16];
     char    path[512];
     char    query[512];
