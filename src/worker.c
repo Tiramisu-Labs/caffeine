@@ -67,7 +67,7 @@ int load_handler(handler_entry_t *entry, const char *so_path, struct stat *st, u
         return -1;
     }
 
-    handler_func f = (handler_func)dlsym(h, "handler");
+    handler_func f = (handler_func)dlsym(h, "tiramisu_handler");
     if (!f) {
         LOG_ERROR("Symbol 'handler' not found in %s", so_path);
         dlclose(h);
