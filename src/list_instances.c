@@ -7,8 +7,8 @@
 #include <signal.h>
 #include <errno.h>
 #include <caffeine.h>
-#include <caffeine_utils.h>
-#include <caffeine_cfg.h>
+#include <utils.h>
+#include <cfg.h>
 #include <log.h>
 
 static int is_pid_running(pid_t pid) {

@@ -2,15 +2,15 @@ ARCH ?= $(shell uname -m)
 
 SRC_DIR = src
 INC_DIR = include
-SRCS    = $(SRC_DIR)/caffeine.c \
+SRCS    = $(SRC_DIR)/main.c \
           $(SRC_DIR)/worker.c \
           $(SRC_DIR)/daemon.c \
           $(SRC_DIR)/log.c \
-          $(SRC_DIR)/caffeine_cfg.c \
-          $(SRC_DIR)/caffeine_sig.c \
-          $(SRC_DIR)/caffeine_utils.c \
+          $(SRC_DIR)/cfg.c \
+          $(SRC_DIR)/sig.c \
+          $(SRC_DIR)/utils.c \
           $(SRC_DIR)/list_instances.c \
-          $(SRC_DIR)/headers.c \
+          $(SRC_DIR)/request.c \
           $(SRC_DIR)/deploy.c \
           $(SRC_DIR)/cJSON.c \
           $(SRC_DIR)/cJSON_Utils.c \
@@ -43,7 +43,7 @@ else
     STRIP_CMD = strip --strip-all $@
 endif
 
-LDFLAGS = -pthread
+LDFLAGS = -pthread -lssh
 OBJ_DIR = build/$(ARCH)
 OBJS    = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
 PREFIX ?= /usr/local

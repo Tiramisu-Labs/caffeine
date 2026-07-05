@@ -1,5 +1,5 @@
-#ifndef CAFFEINE_CFG_H
-#define CAFFEINE_CFG_H
+#ifndef CFG_H
+#define CFG_H
 
 #define DEFAULT_WORKERS 4
 #define DEFAULT_PORT 8080

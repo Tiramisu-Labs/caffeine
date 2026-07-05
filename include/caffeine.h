@@ -1,5 +1,5 @@
-#ifndef COMMON_H
-#define COMMON_H
+#ifndef CAFFEINE_H
+#define CAFFEINE_H
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 #include <signal.h>
 #include <shared_mem.h>
+#include <stdbool.h>
 
 #define SOCKET_PATH "/tmp/"
 #define SOCK_FILE_PREFIX "caffeine_"
@@ -26,6 +27,14 @@
 #define PID_PATH "/tmp/"
 #define CAFFEINE_FILE_PREFIX "caffeine_"
 #define PID_FILE_SUFFIX ".pid"
+#define MAX_KEY_SIZE  4096
+#define MAX_CERT_SIZE 32768
+
+typedef struct host_certs_s {
+    unsigned long path_hash;
+    char*   crt;
+    char*   key;
+}   host_certs_t;
 
 typedef struct headers_s {
     char    host[512];
@@ -36,21 +45,32 @@ typedef struct headers_s {
     char    headers[8192];
     char    handler_name[32];
     char    content_type[256];
+    char    *body;
     char    *headers_end;
     size_t  content_length;
     size_t  bytes_read;
     uint8_t is_query;
 }   headers_t;
 
-typedef const char* (*handler_func)(const char*, char*, size_t, size_t*);
+typedef const char* (*handler_fn)(
+    const char*,
+    const char*,
+    const char*,
+    const char*,
+    size_t,
+    char*,
+    size_t,
+    size_t*
+);
 
 typedef struct {
-    char *path;
-    unsigned long hash;
-    void *dl_handle;
-    handler_func func;
-    time_t last_mtime;
-    int timeout_ms;
+    char                    *path;
+    unsigned long           hash;
+    void                    *dl_handle;
+    handler_fn              func;
+    time_t                  last_mtime;
+    int                     timeout_ms;
+    size_t                  memory;
 } handler_entry_t;
 
 typedef struct {

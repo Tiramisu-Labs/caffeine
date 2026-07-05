@@ -1,11 +1,11 @@
 #define _GNU_SOURCE         /* See feature_test_macros(7) */
 #define _FILE_OFFSET_BITS 64
 #include <caffeine.h>
-#include <caffeine_utils.h>
-#include <caffeine_cfg.h>
+#include <utils.h>
+#include <cfg.h>
 #include <log.h>
 #include <response.h>
-#include <headers.h>
+#include <request.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -21,39 +21,7 @@
 #include <assert.h>
 
 #define TIMEOUT -2
-
-#define HEARTBEAT_INTERVAL_MS 500 // 0.5 sec
-
-void worker_redirect_logs() {
-    char *log_path = get_log_path();
-    int log_fd;
-    
-    log_fd = open(log_path, O_RDWR | O_CREAT | O_APPEND, 0644);
-    
-    if (log_fd < 0) {
-        LOG_ERROR("FATAL: Worker failed to open log file %s: %s", log_path, strerror(errno));
-        return;
-    }
-    
-    if (dup2(log_fd, STDOUT_FILENO) < 0 || dup2(log_fd, STDERR_FILENO) < 0) {
-        close(log_fd);
-        return;
-    }
-
-    if (log_fd > 2) close(log_fd);
-    
-    if (isatty(STDIN_FILENO))
-        if (!freopen("/dev/null", "r", stdin))
-            fprintf(stderr, "error: freopen: couldn't redirect read from stdin to /dev/null/\n");
-    if (isatty(STDOUT_FILENO))
-        if (!freopen(log_path, "a", stdout))
-            fprintf(stderr, "error: freopen: couldn't redirect append from stdout to %s\n", log_path);
-    if (isatty(STDERR_FILENO))
-        if (!freopen(log_path, "a", stderr))
-            fprintf(stderr, "error: freopen: couldn't redirect append from stderr to %s\n", log_path);
-    
-    LOG_INFO("Worker successfully forced redirection of STDOUT/STDERR to log file.");
-}
+#define HEARTBEAT_INTERVAL_MS 500
 
 int load_handler(handler_entry_t *entry, const char *so_path, struct stat *st, unsigned long path_hash) {
     if (entry->dl_handle) {
@@ -67,21 +35,23 @@ int load_handler(handler_entry_t *entry, const char *so_path, struct stat *st, u
         return -1;
     }
 
-    handler_func f = (handler_func)dlsym(h, "tiramisu_handler");
+    handler_fn f = (handler_fn)dlsym(h, "tiramisu_ffi_gateway");
     if (!f) {
-        LOG_ERROR("Symbol 'handler' not found in %s", so_path);
+        LOG_ERROR("Symbol 'tiramisu_ffi_gateway' not found in %s", so_path);
         dlclose(h);
         return -1;
     }
 
-    int *t_ptr = (int *)dlsym(h, "timeout_val");
-    
+    int *t_ptr = (int *)dlsym(h, "timeout");
+    int *m_ptr = (int *)dlsym(h, "memory");
+
     entry->dl_handle = h;
     entry->func = f;
     entry->path = strdup(so_path);
     entry->hash = path_hash;
     entry->last_mtime = st->st_mtime;
-    entry->timeout_ms = t_ptr ? *t_ptr : 5000; 
+    entry->timeout_ms = t_ptr ? *t_ptr : 5000;
+    entry->memory = m_ptr ? *m_ptr : 65536;
 
     return 0;
 }
@@ -128,20 +98,20 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
     
     headers_t hdrs = {0};
     
-    if (read_headers(client_fd, &hdrs) < 0) {
+    if (!read_headers(client_fd, &hdrs)) {
         LOG_WARN("Failed to read headers");
         if (write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN) < 0) {
             LOG_ERROR("error: an error occured while sending BAD_REQUEST");
         }
         return;
     }
-    cJSON *req_json = cJSON_CreateObject();
-    cJSON_AddStringToObject(req_json, "handler", hdrs.handler_name);
-    
-    cJSON *req_headers = cJSON_CreateObject();
-    cJSON_AddStringToObject(req_headers, "headers", hdrs.headers);
-    
-    char *json_request_str = cJSON_PrintUnformatted(req_headers);
+
+    if (hdrs.content_length > 0) {
+        if (!read_body(client_fd, &hdrs)) {
+            return;
+        }
+    }
+
     unsigned long path_hash = hash_path(hdrs.handler_name);
     handler_entry_t *entry = get_handler(cache, hdrs.host, hdrs.handler_name, path_hash);
     
@@ -149,21 +119,27 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
         if (write(client_fd, NOT_FOUND, NOT_FOUND_LEN) < 0) {
             LOG_ERROR("error: an error occured while sending NOT_FOUND");
         }
-        cJSON_Delete(req_json);
-        free(json_request_str);
+        if (hdrs.body) free(hdrs.body);
         return;
     }
-    char response_buffer[65536];
+
+    char response_buffer[entry->memory];
     size_t result_len = 0;
     
     map->workers[i].state = W_BUSY;
     map->workers[i].start_ms = now_ms();
-    const char *result_ptr = entry->func(
-        json_request_str,
+
+    const char *result_ptr = ((handler_fn)entry->func)(
+        hdrs.method,
+        hdrs.path,
+        hdrs.headers,
+        hdrs.body ? hdrs.body : "",
+        hdrs.content_length,
         response_buffer,
         sizeof(response_buffer),
         &result_len
     );
+
     const char *final_json_ptr = (result_ptr != NULL) ? result_ptr : response_buffer;
     cJSON *res_json = cJSON_Parse(final_json_ptr);
     
@@ -189,19 +165,18 @@ static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* 
         free(body_str);
         cJSON_Delete(res_json);
     } else {
-        if (write(client_fd, INTERNAL_ERROR, INTERNAL_ERROR_LEN) <0)
-            LOG_ERROR("failed to send INTERANL_ERROR to client");
+        if (write(client_fd, INTERNAL_ERROR, INTERNAL_ERROR_LEN) < 0)
+            LOG_ERROR("failed to send INTERNAL_ERROR to client");
     }
 
-    cJSON_Delete(req_json);
-    free(json_request_str);
+    if (hdrs.body) {
+        free(hdrs.body);
+        hdrs.body = NULL;
+    }
 }
 
 void exec_worker(int listen_fd, shm_layout_t* map, int i)
 {
-    if (g_cfg.daemonize)
-        worker_redirect_logs();
-
     handler_cache_t cache = {0};
 
     LOG_INFO("Worker %d started", getpid());
@@ -216,8 +191,7 @@ void exec_worker(int listen_fd, shm_layout_t* map, int i)
     socklen_t client_len = sizeof(client_addr);
     char client_ip[INET_ADDRSTRLEN];
     int client_fd;
-    // shm_layout_t layout;
-    // memcpy(&layout, map, sizeof(shm_layout_t));
+
     for (;;) {
         map->workers[i].state = W_IDLE;
 
@@ -246,4 +220,3 @@ void exec_worker(int listen_fd, shm_layout_t* map, int i)
     close(hb_tfd);
     _exit(0);
 }
-

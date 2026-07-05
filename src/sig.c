@@ -1,7 +1,7 @@
-#include <caffeine_sig.h>
-#include <caffeine_utils.h>
+#include <sig.h>
+#include <utils.h>
 #include <caffeine.h>
-#include <caffeine_cfg.h>
+#include <cfg.h>
 #include <log.h>
 #include <pwd.h>
 #include <unistd.h>
@@ -49,7 +49,7 @@ void sigterm_handler(int signum) {
     }
 }
 
-void sigchld_handler(int signum) {
+void sigchld_handler() {
     int status;
     pid_t pid = waitpid(-1, &status, WNOHANG);
     if (pid > 0) {

@@ -2,11 +2,11 @@
 #include <sys/mman.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <caffeine_cfg.h>
+#include <cfg.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <string.h>
-#include <caffeine_utils.h>
+#include <utils.h>
 #include <dlfcn.h>
 #include <log.h>
 

@@ -1,7 +1,7 @@
 #include <caffeine.h>
-#include <caffeine_sig.h>
-#include <caffeine_utils.h>
-#include <caffeine_cfg.h>
+#include <sig.h>
+#include <utils.h>
+#include <cfg.h>
 #include <deploy.h>
 #include <log.h>
 #include <fcntl.h>
@@ -17,7 +17,7 @@
 #include <poll.h>
 #include <netinet/in.h>
 #include <errno.h>
-#include <caffeine_monitor.h>
+#include <monitor.h>
 #include <sys/mman.h>
 
 static void handle_signals(int sigfd, shm_layout_t* map) {
@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
         free_and_exit(EXIT_FAILURE);
     }
 
-    if (g_cfg.daemonize) daemonize();
+    // if (g_cfg.daemonize) daemonize();
 
     if (g_cfg.min_workers > g_cfg.max_workers) g_cfg.min_workers = g_cfg.max_workers;
 

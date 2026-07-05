@@ -1,6 +1,6 @@
-#include <caffeine_cfg.h>
-#include <caffeine_utils.h>
-#include <caffeine_sig.h>
+#include <cfg.h>
+#include <utils.h>
+#include <sig.h>
 #include <log.h>
 #include <unistd.h>
 #include <stdio.h>

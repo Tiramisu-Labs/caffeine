@@ -1,5 +1,5 @@
-#ifndef CAFFEINE_SIG_H
-#define CAFFEINE_SIG_H
+#ifndef SIG_H
+#define SIG_H
 
 #include <signal.h>
 #include <stdlib.h>

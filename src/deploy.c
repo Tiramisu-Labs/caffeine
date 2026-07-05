@@ -1,5 +1,5 @@
 #include <deploy.h>
-#include <caffeine_cfg.h>
+#include <cfg.h>
 #include <log.h>
 #include <sys/stat.h>
 #include <unistd.h>

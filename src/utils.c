@@ -1,5 +1,5 @@
-#include <caffeine_utils.h>
-#include <caffeine_cfg.h>
+#include <utils.h>
+#include <cfg.h>
 #include <log.h>
 #include <caffeine.h>
 #include <sys/stat.h>

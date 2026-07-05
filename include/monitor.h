@@ -1,5 +1,5 @@
-#ifndef CAFFEINE_MONITOR_H
-#define CAFFEINE_MONITOR_H
+#ifndef MONITOR_H
+#define MONITOR_H
 
 #include <sys/types.h>
 #include <pthread.h>

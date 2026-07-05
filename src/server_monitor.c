@@ -1,5 +1,5 @@
-#include <caffeine_monitor.h>
-#include <caffeine_cfg.h>
+#include <monitor.h>
+#include <cfg.h>
 #include <deploy.h>
 #include <log.h>
 #include <stdio.h>
@@ -9,8 +9,8 @@
 #include <signal.h>
 #include <errno.h>
 #include <sys/wait.h>
-#include <caffeine_sig.h>
-#include <caffeine_utils.h>
+#include <sig.h>
+#include <utils.h>
 
 #define GRACE 200 // 1 second
 #define HEARTBEAT_DEAD 1000 // 1 second
