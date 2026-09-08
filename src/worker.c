@@ -1,238 +1,501 @@
-#define _GNU_SOURCE         /* See feature_test_macros(7) */
-#define _FILE_OFFSET_BITS 64
+#define _GNU_SOURCE
+
 #include <caffeine.h>
-#include <caffeine_utils.h>
-#include <caffeine_cfg.h>
+#include <config.h>
+#include <utils.h>
+#include <handler_registry.h>
+#include <shared_mem.h>
 #include <log.h>
 #include <response.h>
 #include <headers.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <ctype.h> 
-#include <errno.h> 
-#include <signal.h>
-#include <limits.h> 
-#include <dlfcn.h>
-#include <pthread.h>
-#include <time.h>
+
 #include <cJSON.h>
-#include <sys/timerfd.h>
-#include <assert.h>
 
-#define TIMEOUT -2
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#define HEARTBEAT_INTERVAL_MS 500 // 0.5 sec
+static volatile sig_atomic_t g_worker_shutdown = 0;
 
-void worker_redirect_logs() {
-    char *log_path = get_log_path();
-    int log_fd;
-    
-    log_fd = open(log_path, O_RDWR | O_CREAT | O_APPEND, 0644);
-    
-    if (log_fd < 0) {
-        LOG_ERROR("FATAL: Worker failed to open log file %s: %s", log_path, strerror(errno));
-        return;
-    }
-    
-    if (dup2(log_fd, STDOUT_FILENO) < 0 || dup2(log_fd, STDERR_FILENO) < 0) {
-        close(log_fd);
-        return;
-    }
 
-    if (log_fd > 2) close(log_fd);
-    
-    if (isatty(STDIN_FILENO)) freopen("/dev/null", "r", stdin); 
-    if (isatty(STDOUT_FILENO)) freopen(log_path, "a", stdout);
-    if (isatty(STDERR_FILENO)) freopen(log_path, "a", stderr); 
-    
-    LOG_INFO("Worker successfully forced redirection of STDOUT/STDERR to log file.");
+static void worker_signal_handler(int sig)
+{
+    if (sig == SIGTERM || sig == SIGINT)
+        g_worker_shutdown = 1;
 }
 
-int load_handler(handler_entry_t *entry, const char *so_path, struct stat *st, unsigned long path_hash) {
-    if (entry->dl_handle) {
-        dlclose(entry->dl_handle);
-        if (entry->path) free(entry->path);
-    }
 
-    void *h = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
-    if (!h) {
-        LOG_ERROR("dlopen failed: %s", dlerror());
+static int worker_setup_signals(void)
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof(sa));
+
+    sa.sa_handler = worker_signal_handler;
+    sigemptyset(&sa.sa_mask);
+
+    /*
+     * Do not use SA_RESTART.
+     *
+     * We want blocking accept()/read() calls to return EINTR
+     * when the worker receives SIGTERM.
+     */
+    sa.sa_flags = 0;
+
+    if (sigaction(SIGTERM, &sa, NULL) < 0)
         return -1;
-    }
 
-    handler_func f = (handler_func)dlsym(h, "handler");
-    if (!f) {
-        LOG_ERROR("Symbol 'handler' not found in %s", so_path);
-        dlclose(h);
+    if (sigaction(SIGINT, &sa, NULL) < 0)
         return -1;
-    }
 
-    int *t_ptr = (int *)dlsym(h, "timeout_val");
-    
-    entry->dl_handle = h;
-    entry->func = f;
-    entry->path = strdup(so_path);
-    entry->hash = path_hash;
-    entry->last_mtime = st->st_mtime;
-    entry->timeout_ms = t_ptr ? *t_ptr : 5000; 
+
+    /*
+     * The master blocks these signals before fork().
+     * Workers must unblock the signals they handle themselves.
+     */
+    sigset_t mask;
+
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGINT);
+
+    if (sigprocmask(SIG_UNBLOCK, &mask, NULL) < 0)
+        return -1;
 
     return 0;
 }
 
-handler_entry_t* get_handler_from_cache(handler_cache_t *cache, const char *handler_name, unsigned long path_hash) {
-    char full_path[1024];
-    snprintf(full_path, sizeof(full_path), "%s%s.so", g_cfg.exec_path, handler_name);
 
-    struct stat st;
-    if (stat(full_path, &st) < 0) {
-        return NULL;
-    }
-
-    for (size_t i = 0; i < cache->size; i++) {
-        if (cache->entries[i].hash == path_hash) {
-            if (cache->entries[i].last_mtime != st.st_mtime) {
-                if (load_handler(&cache->entries[i], full_path, &st, path_hash) != 0) return NULL;
-            }
-            return &cache->entries[i];
-        }
-    }
-
-    if (cache->size >= cache->capacity) {
-        cache->capacity = (cache->capacity == 0) ? 64 : cache->capacity * 2;
-        cache->entries = realloc(cache->entries, sizeof(handler_entry_t) * cache->capacity);
-    }
-
-    handler_entry_t *new_entry = &cache->entries[cache->size];
-    memset(new_entry, 0, sizeof(handler_entry_t));
-
-    if (load_handler(new_entry, full_path, &st, path_hash) == 0) {
-        cache->size++;
-        return new_entry;
-    }
-
-    return NULL;
+static void set_worker_state(
+    shm_layout_t *map,
+    int worker_index,
+    worker_state_t state
+)
+{
+    atomic_store(
+        &map->workers[worker_index].state,
+        state
+    );
 }
 
-static void handle_request(int client_fd, handler_cache_t *cache, shm_layout_t* map, int i)
+
+static void handle_request(
+    int client_fd,
+    const handler_registry_t *registry,
+    shm_layout_t *map,
+    int worker_index
+)
 {
-    struct timeval tv;
-    tv.tv_sec = 5; 
-    tv.tv_usec = 0;
-    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
-    
+    struct timeval tv = {
+        .tv_sec = 5,
+        .tv_usec = 0
+    };
+
+    if (setsockopt(
+            client_fd,
+            SOL_SOCKET,
+            SO_RCVTIMEO,
+            &tv,
+            sizeof(tv)
+        ) < 0) {
+        LOG_WARN(
+            "failed to set receive timeout: %s",
+            strerror(errno)
+        );
+    }
+
+
     headers_t hdrs = {0};
-    
+
     if (read_headers(client_fd, &hdrs) < 0) {
-        LOG_WARN("Failed to read headers");
+        if (!g_worker_shutdown)
+            LOG_WARN("failed to read request headers");
+
         return;
     }
 
-    cJSON *req_json = cJSON_CreateObject();
-    cJSON_AddStringToObject(req_json, "handler", hdrs.handler_name);
-    
-    cJSON *req_headers = cJSON_CreateObject();
-    cJSON_AddStringToObject(req_headers, "headers", hdrs.headers);
-    
-    char *json_request_str = cJSON_PrintUnformatted(req_headers);
-    unsigned long path_hash = hash_path(hdrs.handler_name);
-    handler_entry_t *entry = get_handler_from_cache(cache, hdrs.handler_name, path_hash);
-    
-    if (!entry) {
-        write(client_fd, NOT_FOUND, NOT_FOUND_LEN);
-        cJSON_Delete(req_json);
-        free(json_request_str);
+
+    handler_entry_t *handler =
+        handler_registry_find(
+            registry,
+            hdrs.host,
+            hdrs.path
+        );
+
+    if (!handler) {
+        write_fully(
+            client_fd,
+            NOT_FOUND,
+            NOT_FOUND_LEN
+        );
+
         return;
     }
+
+
+    /*
+     * The worker is now executing user code.
+     */
+    set_worker_state(
+        map,
+        worker_index,
+        W_BUSY
+    );
+
+    uint64_t start = now_ms();
+
+    atomic_store(
+        &map->workers[worker_index].start_ms,
+        start
+    );
+
+    atomic_store(
+        &map->workers[worker_index].deadline_ms,
+        start + handler->timeout_ms
+    );
+
+
+    /*
+     * Keep the current ABI unchanged for now.
+     */
     char response_buffer[65536];
-    size_t result_len = 0;
-    
-    map->workers[i].state = W_BUSY;
-    map->workers[i].start_ms = now_ms();
-    const char *result_ptr = entry->func(
-        json_request_str,
+    size_t response_length = 0;
+
+    cJSON *request_json = cJSON_CreateObject();
+
+    if (!request_json) {
+        write_fully(
+            client_fd,
+            INTERNAL_ERROR,
+            INTERNAL_ERROR_LEN
+        );
+
+        goto done;
+    }
+
+
+    cJSON_AddStringToObject(
+        request_json,
+        "handler",
+        hdrs.path
+    );
+
+    cJSON_AddStringToObject(
+        request_json,
+        "method",
+        hdrs.method
+    );
+
+    cJSON_AddStringToObject(
+        request_json,
+        "headers",
+        hdrs.headers
+    );
+
+
+    char *request_string =
+        cJSON_PrintUnformatted(request_json);
+
+    if (!request_string) {
+        cJSON_Delete(request_json);
+
+        write_fully(
+            client_fd,
+            INTERNAL_ERROR,
+            INTERNAL_ERROR_LEN
+        );
+
+        goto done;
+    }
+
+
+    const char *result = handler->func(
+        request_string,
         response_buffer,
         sizeof(response_buffer),
-        &result_len
+        &response_length
     );
-    const char *final_json_ptr = (result_ptr != NULL) ? result_ptr : response_buffer;
-    cJSON *res_json = cJSON_Parse(final_json_ptr);
-    
-    if (res_json) {
-        cJSON *status = cJSON_GetObjectItem(res_json, "status");
-        cJSON *body = cJSON_GetObjectItem(res_json, "body");
-        
-        int http_status = status ? status->valueint : 200;
-        char *body_str = cJSON_IsObject(body) ? cJSON_PrintUnformatted(body) : strdup(body->valuestring);
-        
-        char http_resp[70000];
-        int full_len = snprintf(http_resp, sizeof(http_resp),
-            "HTTP/1.1 %d %s\r\n"
-            "Content-Length: %zu\r\n"
-            "Content-Type: application/json\r\n"
-            "Connection: close\r\n\r\n"
-            "%s",
-            http_status, (http_status == 200 ? "OK" : "Error"), 
-            strlen(body_str), body_str);
 
-        write(client_fd, http_resp, full_len);
-        free(body_str);
-        cJSON_Delete(res_json);
-    } else {
-        write(client_fd, INTERNAL_ERROR, INTERNAL_ERROR_LEN);
+    const char *final_response =
+        result != NULL
+            ? result
+            : response_buffer;
+
+
+    cJSON *response_json =
+        cJSON_Parse(final_response);
+
+    if (!response_json) {
+        write_fully(
+            client_fd,
+            INTERNAL_ERROR,
+            INTERNAL_ERROR_LEN
+        );
+
+        free(request_string);
+        cJSON_Delete(request_json);
+
+        goto done;
     }
 
-    cJSON_Delete(req_json);
-    free(json_request_str);
+
+    cJSON *status =
+        cJSON_GetObjectItem(response_json, "status");
+
+    cJSON *body =
+        cJSON_GetObjectItem(response_json, "body");
+
+
+    int http_status =
+        cJSON_IsNumber(status)
+            ? status->valueint
+            : 200;
+
+
+    char *body_string = NULL;
+
+    if (cJSON_IsObject(body) || cJSON_IsArray(body)) {
+        body_string = cJSON_PrintUnformatted(body);
+    }
+    else if (cJSON_IsString(body)) {
+        body_string = strdup(body->valuestring);
+    }
+    else {
+        body_string = strdup("");
+    }
+
+
+    if (!body_string) {
+        cJSON_Delete(response_json);
+        free(request_string);
+        cJSON_Delete(request_json);
+
+        write_fully(
+            client_fd,
+            INTERNAL_ERROR,
+            INTERNAL_ERROR_LEN
+        );
+
+        goto done;
+    }
+
+
+    char http_response[70000];
+
+    int response_size = snprintf(
+        http_response,
+        sizeof(http_response),
+
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Length: %zu\r\n"
+        "Content-Type: application/json\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "%s",
+
+        http_status,
+        http_status >= 200 && http_status < 300
+            ? "OK"
+            : "Error",
+
+        strlen(body_string),
+        body_string
+    );
+
+
+    if (response_size > 0 &&
+        (size_t)response_size < sizeof(http_response)) {
+
+        write_fully(
+            client_fd,
+            http_response,
+            (size_t)response_size
+        );
+    }
+    else {
+        write_fully(
+            client_fd,
+            INTERNAL_ERROR,
+            INTERNAL_ERROR_LEN
+        );
+    }
+
+
+    free(body_string);
+    cJSON_Delete(response_json);
+    free(request_string);
+    cJSON_Delete(request_json);
+
+
+done:
+
+    atomic_store(
+        &map->workers[worker_index].deadline_ms,
+        0
+    );
+
+    atomic_store(
+        &map->workers[worker_index].start_ms,
+        0
+    );
+
+    if (!g_worker_shutdown) {
+        set_worker_state(
+            map,
+            worker_index,
+            W_IDLE
+        );
+    }
 }
 
-void exec_worker(int listen_fd, shm_layout_t* map, int i)
+
+void exec_worker(
+    int listen_fd,
+    shm_layout_t *map,
+    int worker_index,
+    const handler_registry_t *registry
+)
 {
-    if (g_cfg.daemonize)
-        worker_redirect_logs();
-
-    handler_cache_t cache = {0};
-
-    LOG_INFO("Worker %d started", getpid());
-
-    int hb_tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-    if (hb_tfd < 0) {
-        LOG_ERROR("timerfd_create failed: %s", strerror(errno));
-        _exit(1);
+    if (!registry) {
+        LOG_ERROR("worker received NULL handler registry");
+        _exit(EXIT_FAILURE);
     }
 
-    struct sockaddr_in client_addr;
-    socklen_t client_len = sizeof(client_addr);
-    char client_ip[INET_ADDRSTRLEN];
-    int client_fd;
-    // shm_layout_t layout;
-    // memcpy(&layout, map, sizeof(shm_layout_t));
-    for (;;) {
-        map->workers[i].state = W_IDLE;
 
-        client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
+    if (worker_setup_signals() < 0) {
+        LOG_ERROR(
+            "failed to setup worker signals: %s",
+            strerror(errno)
+        );
+
+        _exit(EXIT_FAILURE);
+    }
+
+
+    LOG_INFO(
+        "worker started: pid=%d index=%d",
+        getpid(),
+        worker_index
+    );
+
+
+    for (;;) {
+
+        if (g_worker_shutdown)
+            break;
+
+
+        set_worker_state(
+            map,
+            worker_index,
+            W_IDLE
+        );
+
+
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+
+        int client_fd = accept(
+            listen_fd,
+            (struct sockaddr *)&client_addr,
+            &client_len
+        );
+
 
         if (client_fd < 0) {
-            LOG_ERROR("accept failed: %s", strerror(errno));
+
+            if (errno == EINTR) {
+                if (g_worker_shutdown)
+                    break;
+
+                continue;
+            }
+
+            LOG_ERROR(
+                "accept failed: %s",
+                strerror(errno)
+            );
+
             continue;
         }
-        LOG_DEBUG("Worker (PID %d) accepted connection from %s:%d on new FD %d.",
-            getpid(), client_ip, ntohs(client_addr.sin_port), client_fd);
-        
-        handle_request(client_fd, &cache, map, i);
+
+
+        char client_ip[INET_ADDRSTRLEN] = {0};
+
+        if (!inet_ntop(
+                AF_INET,
+                &client_addr.sin_addr,
+                client_ip,
+                sizeof(client_ip)
+            )) {
+
+            strncpy(
+                client_ip,
+                "unknown",
+                sizeof(client_ip) - 1
+            );
+        }
+
+
+        LOG_DEBUG(
+            "worker %d accepted connection from %s:%d on fd %d",
+            getpid(),
+            client_ip,
+            ntohs(client_addr.sin_port),
+            client_fd
+        );
+
+
+        /*
+         * A SIGTERM may have arrived immediately after accept().
+         * Do not start new work while draining.
+         */
+        if (g_worker_shutdown) {
+            close(client_fd);
+            break;
+        }
+
+
+        handle_request(
+            client_fd,
+            registry,
+            map,
+            worker_index
+        );
+
 
         if (close(client_fd) < 0) {
-            if (errno == EBADF) {
-                LOG_DEBUG("Expected EBADF (FD already closed by child) on client FD %d.", client_fd);
-            } else {
-                LOG_WARN("Unexpected error closing client FD %d: %s", client_fd, strerror(errno));
-            }
-        } else {
-            LOG_DEBUG("Successfully closed client FD %d.", client_fd);
+            LOG_WARN(
+                "failed to close client fd %d: %s",
+                client_fd,
+                strerror(errno)
+            );
         }
+
+
+        if (g_worker_shutdown)
+            break;
     }
 
-    close(hb_tfd);
-    _exit(0);
-}
 
+    set_worker_state(
+        map,
+        worker_index,
+        W_DRAINING
+    );
+
+
+    LOG_INFO(
+        "worker %d shutting down",
+        getpid()
+    );
+
+    _exit(EXIT_SUCCESS);
+}

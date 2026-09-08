@@ -2,20 +2,19 @@ ARCH ?= $(shell uname -m)
 
 SRC_DIR = src
 INC_DIR = include
-SRCS    = $(SRC_DIR)/caffeine.c \
-          $(SRC_DIR)/worker.c \
-          $(SRC_DIR)/daemon.c \
-          $(SRC_DIR)/log.c \
-          $(SRC_DIR)/caffeine_cfg.c \
-          $(SRC_DIR)/caffeine_sig.c \
-          $(SRC_DIR)/caffeine_utils.c \
-          $(SRC_DIR)/list_instances.c \
-          $(SRC_DIR)/headers.c \
-          $(SRC_DIR)/deploy.c \
-          $(SRC_DIR)/cJSON.c \
-          $(SRC_DIR)/cJSON_Utils.c \
-          $(SRC_DIR)/server_monitor.c \
-          $(SRC_DIR)/shared_mem.c
+
+SRCS = $(SRC_DIR)/caffeine.c \
+       $(SRC_DIR)/worker.c \
+       $(SRC_DIR)/log.c \
+       $(SRC_DIR)/config.c \
+       $(SRC_DIR)/signals.c \
+       $(SRC_DIR)/utils.c \
+       $(SRC_DIR)/headers.c \
+       $(SRC_DIR)/cJSON.c \
+       $(SRC_DIR)/cJSON_Utils.c \
+       $(SRC_DIR)/monitor.c \
+       $(SRC_DIR)/shared_mem.c \
+       $(SRC_DIR)/handler_registry.c
 
 ifeq ($(ARCH),x86_64)
     CC = gcc
@@ -35,6 +34,7 @@ else
 endif
 
 DEBUG ?= 0
+
 ifeq ($(DEBUG),1)
     CFLAGS = -Wall -Wextra -g -O0 -I$(INC_DIR)
     STRIP_CMD = @echo "Debug build: skipping strip."
@@ -43,9 +43,11 @@ else
     STRIP_CMD = strip --strip-all $@
 endif
 
-LDFLAGS = -pthread
+LDFLAGS = -pthread -ldl
+
 OBJ_DIR = build/$(ARCH)
-OBJS    = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
+OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
+
 PREFIX ?= /usr/local
 
 .PHONY: all clean install

@@ -1,40 +1,34 @@
 #ifndef SHARED_MEM_H
 #define SHARED_MEM_H
 
-#define MAX_HANDLERS 128
-#define MAX_WORKERS  64
-
-#include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
-#include <unistd.h>
 #include <stdatomic.h>
+#include <sys/types.h>
+
+#define MAX_WORKERS 64
+
+typedef enum {
+    W_IDLE = 0,
+    W_BUSY,
+    W_DRAINING
+} worker_state_t;
 
 typedef struct {
-    atomic_char           so_path[512];
-    atomic_uint_least32_t timeout_ms;
-    atomic_uint_least64_t hash;
-    atomic_uint_least64_t version;
-} shm_handler_t;
+    atomic_bool used;
+    atomic_int pid;
+    atomic_int state;
 
-typedef struct {
-    atomic_bool             used;
-    atomic_int              pid;
-    atomic_int              state;
-    atomic_uint_least8_t    handler_idx;
-    atomic_uint_least64_t   start_ms;
-    atomic_uint_least64_t   last_heartbeat;
-    atomic_uint_least64_t   handler_ver;
+    atomic_uint_least64_t start_ms;
+    atomic_uint_least64_t deadline_ms;
 } shm_worker_t;
 
-typedef struct shm_layout_s {
-    uint32_t handler_count;
-    shm_handler_t handlers[MAX_HANDLERS];
+typedef struct {
+    shm_worker_t workers[MAX_WORKERS];
+    atomic_uint_least32_t active_workers;
+} shm_layout_t;
 
-    uint32_t worker_count;
-    shm_worker_t  workers[MAX_WORKERS];
-}   shm_layout_t;
-
-// Prototypes
-void* create_shared_map();
+shm_layout_t *create_shared_map(void);
+void destroy_shared_map(shm_layout_t *map);
 
 #endif

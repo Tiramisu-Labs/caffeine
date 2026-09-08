@@ -1,26 +1,21 @@
-#include <stdio.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <string.h>
+#include <stddef.h>
 
-const char* handler(
-    const char *request_data, 
-    char *response_buffer, 
+const char *handler(
+    const char *request_data,
+    char *response_buffer,
     size_t buffer_size,
     size_t *result_len
-) {
-    const char* STATIC_JSON = "{\"status\": 200, \"body\": \"Hello from Static C!\n\"}";
+)
+{
+    (void)request_data;
+    (void)response_buffer;
+    (void)buffer_size;
 
-    // 1. Set the length (Optional, but highly recommended for clarity)
-    *result_len = strlen(STATIC_JSON);
-    
-    // 2. Return the pointer to the static memory address
-    return STATIC_JSON;
-}
+    static const char *response =
+        "{\"status\":200,\"body\":\"Hello from Static C!\\n\"}";
 
-#ifdef __cplusplus
+    *result_len = strlen(response);
+
+    return response;
 }
-#endif

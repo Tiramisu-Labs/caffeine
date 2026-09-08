@@ -1,103 +1,210 @@
 #include <headers.h>
 #include <response.h>
-#include <log.h>
-#include <caffeine_utils.h>
-#include <stdint.h>
-#include <unistd.h>
+#include <utils.h>
+
+#include <ctype.h>
 #include <errno.h>
 #include <stdlib.h>
-#include <ctype.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/socket.h>
 
-static void strupperncpy(char *__restrict __dest, const char *__restrict __src, size_t max_size) {
-    int i = 0;
-    while (__src[i] && i < max_size) {
-        __dest[i] = toupper(__src[i]);
-        i++;
+static int parse_request_line(
+    char *line,
+    headers_t *hdrs
+)
+{
+    char *method;
+    char *target;
+    char *protocol;
+
+    method = strtok(line, " ");
+    target = strtok(NULL, " ");
+    protocol = strtok(NULL, " ");
+
+    if (!method || !target || !protocol)
+        return -1;
+
+    if (strlen(method) >= sizeof(hdrs->method) ||
+        strlen(protocol) >= sizeof(hdrs->protocol))
+        return -1;
+
+    if (target[0] != '/')
+        return -1;
+
+    if (strchr(target, '\0') == NULL)
+        return -1;
+
+    strcpy(hdrs->method, method);
+    strcpy(hdrs->protocol, protocol);
+
+    char *query = strchr(target, '?');
+
+    if (query) {
+        *query = '\0';
+        query++;
+
+        if (strlen(query) >= sizeof(hdrs->query))
+            return -1;
+
+        strcpy(hdrs->query, query);
+        hdrs->is_query = 1;
+    } else {
+        hdrs->query[0] = '\0';
+        hdrs->is_query = 0;
     }
-    __dest[i] = 0;
+
+    if (strlen(target) >= sizeof(hdrs->path))
+        return -2;
+
+    strcpy(hdrs->path, target);
+
+    return 0;
 }
 
-int read_headers(int client_fd, headers_t *hdrs) {
-    ssize_t bytes_read = 0;
+static int parse_content_headers(
+    char *line,
+    headers_t *hdrs
+)
+{
+    char *colon = strchr(line, ':');
 
-    int i = 0;
-    while (hdrs->bytes_read < sizeof(hdrs->headers) - 1) {
-        bytes_read = read(client_fd, hdrs->headers + hdrs->bytes_read, sizeof(hdrs->headers) - 1 - hdrs->bytes_read);
+    if (!colon)
+        return 0;
 
-        if (bytes_read > 0) {
-            hdrs->bytes_read += bytes_read;
-            hdrs->headers[hdrs->bytes_read] = '\0';
-            hdrs->headers_end = find_headers_end(hdrs->headers, "\r\n\r\n", hdrs->bytes_read);
-            if (hdrs->headers_end) {
-                if (hdrs->headers_end == hdrs->headers) return -1;
-                int i = 0;
-                int j = 0;
-                while (hdrs->headers[i] && hdrs->headers[i] != ' ') {
-                    hdrs->method[j++] = hdrs->headers[i++];
-                    if (j == sizeof(hdrs->method)) return -1;
-                }
-                if (strcmp(hdrs->method, "GET") && strcmp(hdrs->method, "HEAD") &&
-                    strcmp(hdrs->method, "DELETE") && strcmp(hdrs->method, "PUT") &&
-                    strcmp(hdrs->method, "POST") && strcmp(hdrs->method, "OPTIONS")) {
-                        write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN);
-                        return -1;
-                }
-                i++; // skip space
-                if (hdrs->headers[i] != '/') {
-                    write(client_fd, BAD_REQUEST, BAD_REQUEST_LEN);
-                    return -1;
-                }
-                j = 0;
-                i++; // skip '/'
-                while (hdrs->headers[i] && hdrs->headers[i] != ' ' && hdrs->headers[i] != '?') {
-                    hdrs->path[j] = hdrs->headers[i];
-                    hdrs->handler_name[j] = hdrs->headers[i];
-                    i++;
-                    j++;
-                    if (j == sizeof(hdrs->path) || j == sizeof(hdrs->handler_name)) return -1;
-                }
-                hdrs->handler_name[j] = 0;
-                if (hdrs->headers[i] == '?') {
-                    hdrs->is_query = 1;
-                    int k = 0;
-                    while (hdrs->headers[i] && hdrs->headers[i] != ' ') {
-                        hdrs->path[j++] = hdrs->headers[i++];
-                        hdrs->query[k++] = hdrs->headers[i];
-                        if (j == sizeof(hdrs->path)) return -1;
-                        if (k == sizeof(hdrs->query)) return -1;
-                    }
-                    hdrs->query[k] = 0;
-                }
-                hdrs->path[j] = 0;
-                if (j > 512) {
-                    write(client_fd, TOO_LONG, TOO_LONG_LEN);
-                    return -1;
-                }
-                // add protocol eventually
+    *colon = '\0';
+
+    char *name = line;
+    char *value = colon + 1;
+
+    while (*value && isspace((unsigned char)*value))
+        value++;
+
+    if (strcasecmp(name, "Host") == 0) {
+        if (strlen(value) >= sizeof(hdrs->host))
+            return -1;
+
+        strcpy(hdrs->host, value);
+        return 0;
+    }
+
+    if (strcasecmp(name, "Content-Type") == 0) {
+        if (strlen(value) >= sizeof(hdrs->content_type))
+            return -1;
+
+        strcpy(hdrs->content_type, value);
+        return 0;
+    }
+
+    if (strcasecmp(name, "Content-Length") == 0) {
+        char *end = NULL;
+
+        errno = 0;
+
+        unsigned long length = strtoul(value, &end, 10);
+
+        if (errno != 0 || end == value || *end != '\0')
+            return -1;
+
+        hdrs->content_length = (size_t)length;
+    }
+
+    return 0;
+}
+
+int read_headers(int client_fd, headers_t *hdrs)
+{
+    if (!hdrs)
+        return -1;
+
+    memset(hdrs, 0, sizeof(*hdrs));
+
+    size_t used = 0;
+
+    while (used < sizeof(hdrs->headers) - 1) {
+        ssize_t n = recv(
+            client_fd,
+            hdrs->headers + used,
+            sizeof(hdrs->headers) - 1 - used,
+            0
+        );
+
+        if (n > 0) {
+            used += (size_t)n;
+            hdrs->headers[used] = '\0';
+
+            if (used >= 4 &&
+                memcmp(
+                    hdrs->headers + used - 4,
+                    "\r\n\r\n",
+                    4
+                ) == 0) {
                 break;
             }
-        } else if (bytes_read == 0) {
-            return -1;
-        } else if (bytes_read == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
 
-                int poll_result = poll(&pfd, 1, 5000);
-                if (poll_result < 0) {
-                    if (errno == EINTR) continue;
-                    LOG_ERROR("poll failed: %s", strerror(errno));
-                    return -1;
-                } else if (poll_result == 0) {
-                    LOG_WARN("Client timeout while reading headers on FD %d.", client_fd);
-                    return -1;
-                }
-            } else {
-                LOG_ERROR("read failed: %s", strerror(errno));                
-                return -1;
-            }
+            continue;
         }
+
+        if (n < 0 && errno == EINTR)
+            continue;
+
+        return -1;
     }
-    
-    if (!hdrs->headers_end) return -1;
-    return 1;
+
+    if (used == sizeof(hdrs->headers) - 1 &&
+        strstr(hdrs->headers, "\r\n\r\n") == NULL) {
+        return -2;
+    }
+
+    char *headers_end = strstr(hdrs->headers, "\r\n\r\n");
+
+    if (!headers_end)
+        return -1;
+
+    *headers_end = '\0';
+
+    char *line = hdrs->headers;
+
+    char *line_end = strstr(line, "\r\n");
+
+    if (!line_end)
+        return -1;
+
+    *line_end = '\0';
+
+    int request_result = parse_request_line(line, hdrs);
+
+    if (request_result != 0)
+        return request_result;
+
+    line = line_end + 2;
+
+    while (*line) {
+        line_end = strstr(line, "\r\n");
+
+        if (line_end)
+            *line_end = '\0';
+
+        if (parse_content_headers(line, hdrs) < 0)
+            return -1;
+
+        if (!line_end)
+            break;
+
+        line = line_end + 2;
+    }
+
+    if (hdrs->host[0] == '\0')
+        return -1;
+
+    if (strcasecmp(hdrs->method, "GET") != 0 &&
+        strcasecmp(hdrs->method, "POST") != 0 &&
+        strcasecmp(hdrs->method, "PUT") != 0 &&
+        strcasecmp(hdrs->method, "DELETE") != 0 &&
+        strcasecmp(hdrs->method, "PATCH") != 0 &&
+        strcasecmp(hdrs->method, "HEAD") != 0) {
+        return -3;
+    }
+
+    return 0;
 }

@@ -1,85 +1,104 @@
 #include <log.h>
-#include <caffeine.h>
-#include <sys/types.h>
-#include <stdarg.h>
+
+#include <ctype.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <string.h>
-#include <ctype.h>
-#include <pwd.h>
 
-log_level_t g_log_level;
+log_level_t g_log_level = INFO;
 
-const char* log_level_to_str(log_level_t level) {
+
+static const char *log_level_to_string(log_level_t level)
+{
     switch (level) {
         case DEBUG: return "DEBUG";
         case INFO:  return "INFO";
         case WARN:  return "WARN";
         case ERROR: return "ERROR";
-        default: return "UNKNOWN";
+        default:    return "UNKNOWN";
     }
 }
 
-void set_log_level(const char *level_str) {
-    char upper_level[10];
-    if (level_str == NULL || strlen(level_str) >= sizeof(upper_level)) {
+
+void set_log_level(const char *level_str)
+{
+    if (!level_str) {
         g_log_level = INFO;
         return;
     }
-    
-    for (int i = 0; level_str[i] != '\0'; i++) {
-        upper_level[i] = toupper((unsigned char)level_str[i]);
-    }
-    upper_level[strlen(level_str)] = '\0';
 
-    if (strcmp(upper_level, "DEBUG") == 0) {
+    char level[16];
+    size_t len = strlen(level_str);
+
+    if (len >= sizeof(level)) {
+        g_log_level = INFO;
+        return;
+    }
+
+    for (size_t i = 0; i < len; i++)
+        level[i] = (char)toupper((unsigned char)level_str[i]);
+
+    level[len] = '\0';
+
+    if (strcmp(level, "DEBUG") == 0)
         g_log_level = DEBUG;
-    } else if (strcmp(upper_level, "INFO") == 0) {
+    else if (strcmp(level, "INFO") == 0)
         g_log_level = INFO;
-    } else if (strcmp(upper_level, "WARN") == 0) {
+    else if (strcmp(level, "WARN") == 0)
         g_log_level = WARN;
-    } else if (strcmp(upper_level, "ERROR") == 0) {
+    else if (strcmp(level, "ERROR") == 0)
         g_log_level = ERROR;
-    } else {
-        fprintf(stderr, "Warning: Invalid log level '%s' specified. Defaulting to INFO.\n", level_str);
+    else {
+        fprintf(
+            stderr,
+            "invalid log level '%s', using INFO\n",
+            level_str
+        );
+
         g_log_level = INFO;
     }
 }
 
-void server_log(log_level_t level, const char *fmt, ...) {
-    if (level < g_log_level) {
-        return;
-    }
 
-    char time_buf[24];
-    char log_message[4096] = {0};
-    
-    time_t timer;
-    struct tm *tm_info;
-    time(&timer);
-    tm_info = localtime(&timer);
-    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+void server_log(
+    log_level_t level,
+    const char *fmt,
+    ...
+)
+{
+    if (level < g_log_level)
+        return;
+
+    time_t now = time(NULL);
+
+    struct tm tm_now;
+
+    if (localtime_r(&now, &tm_now) == NULL)
+        return;
+
+    char time_buf[20];
+
+    strftime(
+        time_buf,
+        sizeof(time_buf),
+        "%Y-%m-%d %H:%M:%S",
+        &tm_now
+    );
+
+    fprintf(
+        stderr,
+        "%s [%s] [PID %d] ",
+        time_buf,
+        log_level_to_string(level),
+        (int)getpid()
+    );
 
     va_list args;
+
     va_start(args, fmt);
-    vsnprintf(log_message, sizeof(log_message), fmt, args);
+    vfprintf(stderr, fmt, args);
     va_end(args);
 
-    char final_output[4096 + 64];
-    snprintf(final_output, sizeof(final_output), "%s [%s] [PID %d] %s\n",
-             time_buf, log_level_to_str(level), getpid(), log_message);
-    
-    ssize_t len = strlen(final_output);
-    if (level >= WARN) {
-        const char *color = (level == ERROR) ? COLOR_BRIGHT_RED : COLOR_BRIGHT_YELLOW;
-        write(STDERR_FILENO, color, strlen(color));
-        write(STDERR_FILENO, final_output, len);
-        write(STDERR_FILENO, COLOR_RESET, strlen(COLOR_RESET));
-    } else {
-        const char *color = (level == DEBUG) ? COLOR_CYAN : COLOR_GREEN;
-        write(STDERR_FILENO, color, strlen(color));
-        write(STDERR_FILENO, final_output, len);
-        write(STDERR_FILENO, COLOR_RESET, strlen(COLOR_RESET));
-    }
+    fputc('\n', stderr);
 }
